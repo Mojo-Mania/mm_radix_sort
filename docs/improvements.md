@@ -10,24 +10,39 @@ long prefix -- paths, namespaced identifiers, ARNs -- every one of those shared
 bytes costs a full pass over the range that finds exactly one occupied bucket
 and moves nothing.
 
-Measured on 100 000 path-like keys built from the English word list
+Measured two ways. On generated path-like keys, 100 000 of them
 (`pixi run bench-strings`):
 
 | shared prefix | `sort` | `radix_sort` | net |
-| --- | --- | --- | --- |
-| 7.5 bytes | 116.1 ns/word | 65.1 ns/word | **1.79x** |
-| 20.5 bytes | 138.1 ns/word | 95.5 ns/word | **1.46x** |
-| 66.5 bytes | 153.8 ns/word | 165.7 ns/word | **0.93x** |
+| --- | ---: | ---: | ---: |
+| 7.5 bytes | 111.7 ns/key | 63.5 ns/key | **1.77x** |
+| 20.5 bytes | 137.8 ns/key | 95.7 ns/key | **1.45x** |
+| 66.5 bytes | 172.8 ns/key | 178.2 ns/key | **0.97x** |
 
-The comparison sort walks the same prefix with a word-at-a-time memcmp, which
+And on corpora derived from a book (`pixi run bench-large`), where the short
+keys win and the long ones do not:
+
+| corpus | keys | mean len | prefix | net |
+| --- | ---: | ---: | ---: | ---: |
+| tokens | 562 488 | 4.7 B | 4.5 B | **1.73x** |
+| vocabulary | 41 621 | 8.0 B | 5.6 B | **1.87x** |
+| lines | 50 886 | 61.7 B | 7.7 B | **1.16x** |
+| phrases | 562 482 | 33.0 B | 10.3 B | **0.97x** |
+
+The comparison sort walks a shared prefix with a word-at-a-time memcmp, which
 is why it does not degrade the same way.
 
 The fix is to detect a single-occupied-bucket level and advance `depth` eight
 bytes at a time by comparing `UInt64` chunks, falling back to a byte at the
-first chunk that differs. That turns 59 passes into 8. It needs a wider
+first chunk that differs. That turns 66 passes into 9. It needs a wider
 extractor than the current `byte_of(element, depth) -> Int`, so it is a change
 to the generic interface, not just to the implementation -- which is why it is
 written down here rather than done.
+
+Note that prefix depth does not explain everything: `lines` shares 7.7 bytes
+and gets 1.16x while path keys sharing 7.5 bytes get 1.77x. Key length differs
+between them by 3x, so length is doing something independent of prefix depth.
+Worth separating before assuming the chunked skip fixes both.
 
 ## The cutoff comparison still calls through `byte_of` per byte
 

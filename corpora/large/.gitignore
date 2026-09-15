@@ -1,0 +1,6 @@
+# Nothing in this directory is committed. It holds a book-sized text file that
+# the large-string benchmark derives its corpora from; `setup.sh` puts it here.
+*
+!.gitignore
+!setup.sh
+!README.md

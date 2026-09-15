@@ -46,10 +46,11 @@ ten million, so on small inputs that fixed cost is the entire runtime.
 kernel directly, the crossovers are n = 64 for `uint8`, ~100 for `uint16`,
 ~700 for `uint32` and ~1100 for `uint64`.
 
-**For strings it depends on the shape of the keys.** On a few hundred words it
-is a wash. On a hundred thousand it wins by **1.8x** — unless the keys share a
-long prefix, where it *loses*, because this sort spends one full pass over the
-range per shared byte. See [Strings](#strings).
+**For strings, it depends on the shape of the keys.** Sorting half a million
+words out of a book it wins by **1.7x**, and a shuffled vocabulary by
+**1.9x**. But it advances one byte per recursion level, so keys that are long
+or share a deep prefix — paths, ARNs, namespaced identifiers — bring it back
+to parity or worse. See [Strings](#strings).
 
 **It sorts by bytes, not by a comparator.** These sorts read a key's bytes, so
 they cover scalars, strings, and anything you write a byte extractor for.
@@ -361,42 +362,51 @@ see [`docs/migration.md`](docs/migration.md).
 
 ### Strings
 
-`pixi run bench-strings`. Both columns include a `List[String]` copy per
-iteration, the only way to start each run from unsorted input; `net` takes it
-out.
+The twelve word lists in `corpora/` are a few hundred entries each, which is
+below the size at which any radix sort has something to offer — they come out
+a wash, and they cannot settle anything. The measurements that can are derived
+from a whole book: half a million keys, four shapes.
+`bash corpora/large/setup.sh` fetches the text, then `pixi run bench-large`.
 
-Twelve real word lists — a few hundred words each, below the size where a
-radix sort has anything to offer:
+| corpus | keys | mean len | prefix | prefix % | `sort` | `radix_sort` | net |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| tokens | 562 488 | 4.7 B | 4.5 B | 96% | 67.8 ns | 39.5 ns | **1.73x** |
+| vocabulary | 41 621 | 8.0 B | 5.6 B | 70% | 101.9 ns | 55.0 ns | **1.87x** |
+| lines | 50 886 | 61.7 B | 7.7 B | 13% | 119.0 ns | 103.4 ns | **1.16x** |
+| phrases | 562 482 | 33.0 B | 10.3 B | 31% | 143.3 ns | 147.9 ns | 0.97x |
 
-| corpus | words | shared prefix | `sort` | `radix_sort` | net |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| english | 999 | 3.6 B | 21.9 ns | 22.1 ns | 0.99x |
-| french | 471 | 2.1 B | 19.8 ns | 17.5 ns | **1.14x** |
-| l33t | 487 | 2.6 B | 18.9 ns | 16.2 ns | **1.18x** |
-| s3_actions | 161 | 10.8 B | 24.5 ns | 35.4 ns | 0.68x |
-| hindi | 450 | 12.4 B | 31.7 ns | 40.9 ns | 0.77x |
+Nanoseconds per key, and the speedup net of the `List[String]` copy each
+iteration needs to start from unsorted input. Two clean runs agreed to within
+3% on every row.
 
-The same words built into path-like keys, at scale:
+*tokens* is every whitespace-separated word in order, so it repeats heavily —
+the hundred commonest words are about half the text. *vocabulary* is the
+distinct tokens, shuffled back out of sorted order. *lines* and *phrases* are
+the non-blank lines and every run of six consecutive words.
+
+The other axis is how much prefix the keys share, measured on generated
+path-like keys (`pixi run bench-strings`):
 
 | keys | shared prefix | `sort` | `radix_sort` | net |
 | ---: | ---: | ---: | ---: | ---: |
-| 10 000 | 6.4 B | 85.4 ns | 52.9 ns | **1.62x** |
 | 100 000 | 7.5 B | 111.7 ns | 63.5 ns | **1.77x** |
 | 100 000 | 20.5 B | 137.8 ns | 95.7 ns | **1.45x** |
-| 10 000 | 65.4 B | 97.3 ns | 140.3 ns | 0.69x |
 | 100 000 | 66.5 B | 172.8 ns | 178.2 ns | 0.97x |
 
-This table was written expecting the opposite. A comparison sort re-reads a
-shared prefix at every level of its recursion, so long prefixes ought to favour
-the radix sort — but the loss is on the radix side: it advances **one byte per
-level**, so a 59-byte shared prefix costs 59 full histogram passes over the
-range, each finding a single occupied bucket, before the keys begin to differ.
-The comparison sort walks that prefix with a word-at-a-time memcmp.
+**A deep shared prefix is what costs.** This sort advances one byte per
+recursion level, so a 66-byte shared prefix means 66 full histogram passes
+over the range, each finding a single occupied bucket, before the keys begin
+to differ at all. The comparison sort walks that same prefix with a
+word-at-a-time memcmp. That is the one mechanism here that both tables agree
+on, and the fix — advancing eight bytes at a time when a level has one
+occupied bucket — is in [`docs/improvements.md`](docs/improvements.md).
 
-Advancing eight bytes at a time when a level has one occupied bucket would turn
-those 59 passes into 8. It needs a wider extractor than
-`byte_of(element, depth) -> Int`, so it is written up in
-[`docs/improvements.md`](docs/improvements.md) rather than done.
+**Prefix depth alone does not order every row, though.** *lines* shares only
+7.7 bytes and manages 1.16x, while path keys sharing 7.5 bytes manage 1.77x.
+The difference between them is key length — 61.7 bytes against about 20 — so
+length is doing something too, and I have not separated the two effects. What
+the tables support is the pairing: **short keys, shallow prefixes, a clear
+win; long keys or deep prefixes, parity.**
 
 ### The dispatch threshold
 
@@ -429,8 +439,19 @@ pixi run bench              # the scalar table
 pixi run bench-bits         # the digit-width sweep
 pixi run bench-cardinality  # repetition and key width
 pixi run bench-dispatch     # where the fallback should sit
-pixi run bench-strings      # the corpora and the path-like keys
+pixi run bench-strings      # the small corpora and the path-like keys
+pixi run bench-large        # a whole book, four ways (needs setup, below)
 ```
+
+The large-string benchmark needs one text file that is not committed:
+
+```bash
+bash corpora/large/setup.sh                  # download it
+bash corpora/large/setup.sh ~/some/book.txt  # or point at a copy
+```
+
+See [`corpora/large/README.md`](corpora/large/README.md). Everything else runs
+from a clean checkout.
 
 Benchmarks are sensitive to anything else running on the machine — an
 unrelated `git add` during a run moved one row by 50%. Run them on an

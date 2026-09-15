@@ -6,7 +6,7 @@ they matter because random fixed-length keys hide the things real keys do:
 repeat, vary in length, and run to several bytes per character.
 
 ```mojo
-from corpora import load, names
+from corpora import load, load_large_text, names
 
 var words = load("greek")
 ```
@@ -38,6 +38,28 @@ def names() -> List[String]:
         "chinese",
         "japanese",
     ]
+
+
+def load_large_text() raises -> String:
+    """Returns the whole text the large-string benchmark derives its corpora from.
+
+    The file is not committed -- see `corpora/large/README.md` -- so this
+    raises with a pointer to the setup script when it is missing.
+
+    Raises:
+        Error: If `corpora/large/war-and-peace.txt` is not there.
+
+    Returns:
+        The entire file as one string.
+    """
+    var path = cwd() / "corpora" / "large" / "war-and-peace.txt"
+    if not path.exists():
+        raise Error(
+            "corpora/large/war-and-peace.txt is missing. Run"
+            " `bash corpora/large/setup.sh` to fetch it, or pass it a path to"
+            " a large plain-text file you already have."
+        )
+    return path.read_text()
 
 
 def load(name: StringSlice) raises -> List[String]:
