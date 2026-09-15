@@ -10,7 +10,8 @@ sort never asks: it reads the digits of a key and puts each element where its
 digits say it belongs. The work is then proportional to the number of digits
 rather than to `log n`, and on fixed-width numeric data that trade is very
 one-sided — on an array of 64 Ki elements or more it is **7 to 28 times
-faster than the stdlib's `sort`**, with the narrower types gaining the most.
+faster than the stdlib's `sort`** on an Apple M4 and **6 to 30 times** on an
+AMD Ryzen AI 9 HX 370, with the narrower types gaining the most.
 
 ```mojo
 from mm_radix_sort import radix_sort
@@ -37,20 +38,25 @@ public too, for when you know something it does not.
 enough that there is not much to weigh up, and it grows both with the size of
 the array and as the type gets narrower — a narrow key has fewer digits to
 walk. At 64 Ki elements a `uint8` sorts **27.8x** faster than `sort` and a
-`uint64` **7.6x**; at 4 Ki those become 8.4x and 2.3x.
+`uint64` **7.6x**; at 4 Ki those become 8.4x and 2.3x. The Ryzen gives 30.1x
+and 9.6x at 64 Ki but only 4.6x and 2.2x at 4 Ki, where a `float64` sorts
+slower with every radix kernel than with `sort` (0.8x at best).
 
 **Below the crossover, don't.** A radix pass writes its whole histogram twice —
 once to zero it, once to prefix-sum it — whether you give it ten elements or
 ten million, so on small inputs that fixed cost is the entire runtime.
 `radix_sort` falls back to `sort` there and you can ignore this. If you call a
 kernel directly, the crossovers are n = 64 for `uint8`, ~100 for `uint16`,
-~700 for `uint32` and ~1100 for `uint64`.
+~700 for `uint32` and ~1100 for `uint64` on the M4. On the Ryzen they sit at
+about 64, 128, 1000 and 4000, and the `uint64` fallback switches too early
+there — see [The dispatch threshold](#the-dispatch-threshold).
 
 **For strings, it depends on the shape of the keys.** Sorting half a million
 words out of a book it wins by **1.7x**, and a shuffled vocabulary by
-**1.9x**. But it advances one byte per recursion level, so keys that are long
-or share a deep prefix — paths, ARNs, namespaced identifiers — bring it back
-to parity or worse. See [Strings](#strings).
+**1.9x** (2.4x and 1.9x on the Ryzen). But it advances one byte per recursion
+level, so keys that are long or share a deep prefix — paths, ARNs, namespaced
+identifiers — bring it back to parity or worse on the M4. On the Ryzen those
+cases still win, by about 1.4x to 1.5x. See [Strings](#strings).
 
 **It sorts by bytes, not by a comparator.** These sorts read a key's bytes, so
 they cover scalars, strings, and anything you write a byte extractor for.
@@ -215,8 +221,8 @@ LSD passes cost more than stopping early, and nowhere else measured.
 The two MSD variants differ only in the partition step: `msb_radix_sort`
 copies the range aside and scatters it back, `american_flag_sort` permutes in
 place with cyclic swaps. Permuting in place costs between **1.8x and 7.3x**
-across the measured grid — widest on the narrow types — and buys you a sort
-that never touches the heap.
+across the measured grid on the M4 and 1.5x to 6.3x on the Ryzen — widest on
+the narrow types — and buys you a sort that never touches the heap.
 
 ### Variable-length keys need a 257th bucket
 
@@ -232,12 +238,18 @@ string whose duplicates drove the recursion below its own length.
 
 ## Performance
 
-Apple M4, one variant per process, `-D ASSERT=none`. Every timing refills the
-working buffer from a pristine copy before sorting, both inside the timed
-region, because a sort run twice on the same buffer measures the second run on
-already-sorted input. That refill is a `memcpy` costing 0.01–0.10 ns/element;
-it is identical for every contender and is reported as a floor rather than
-subtracted out.
+Two machines: an Apple M4, and an AMD Ryzen AI 9 HX 370 on Linux with the
+process pinned to one of its four full-size Zen 5 cores (`taskset -c 2`). One
+variant per process, `-D ASSERT=none`. Every timing refills the working buffer
+from a pristine copy before sorting, both inside the timed region, because a
+sort run twice on the same buffer measures the second run on already-sorted
+input. That refill is a `memcpy` costing 0.01–0.10 ns/element on the M4 and
+0.01–0.14 on the Ryzen; it is identical for every contender and is reported as
+a floor rather than subtracted out.
+
+The Ryzen figures are the median of three runs for the scalar, digit-width and
+path-key tables, and the mean of two for the rest. A Ryzen cell whose runs
+differed by more than 20% is marked ‡.
 
 Reproduce with `pixi run bench`.
 
@@ -245,6 +257,8 @@ Reproduce with `pixi run bench`.
 
 Speedup against `sort` on uniformly random input. The `sort` column is its
 absolute cost in nanoseconds per element.
+
+**Apple M4**
 
 | type | n | `sort` | `lsb[8]` | `lsb[11]` | `msb` | `aflag` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -275,22 +289,60 @@ other run put it at 1.3x. At 4 Ki a six-pass sort is close enough to the
 crossover that the number is not stable. Of the 81 cells measured twice, this
 was the only genuine disagreement.
 
-Three things worth reading off that table.
+**AMD Ryzen AI 9 HX 370**
+
+| type | n | `sort` | `lsb[8]` | `lsb[11]` | `msb` | `aflag` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `uint8` | 4 Ki | 3.2 ns | **4.6x** | — | 4.5x | 0.8x |
+| `uint8` | 64 Ki | 20.8 ns | **30.1x** | — | 30.1x | 5.3x |
+| `uint8` | 1 Mi | 20.6 ns | **27.4x** | — | 27.2x | 4.3x |
+| `int16` | 4 Ki | 5.1 ns | **3.7x** | 2.9x | 1.4x | 0.7x |
+| `int16` | 64 Ki | 37.8 ns | **28.6x** | 24.8x | 18.8x | 3.8x |
+| `int16` | 1 Mi | 39.9 ns | **29.3x** | 25.4x | 21.4x | 4.0x |
+| `uint32` | 4 Ki | 4.1 ns | 1.8x | **1.9x** | 1.7x | 0.9x |
+| `uint32` | 64 Ki | 36.1 ns | 15.3x | **18.6x** | 5.7x | 3.1x |
+| `uint32` | 1 Mi | 47.0 ns | 19.6x | **23.6x** | 5.4x | 3.5x |
+| `int32` | 4 Ki | 4.4 ns | 1.9x | **2.0x** | 1.4x | 0.8x |
+| `int32` | 64 Ki | 35.9 ns | 15.3x | **18.7x** | 4.8x | 2.7x |
+| `int32` | 1 Mi | 46.4 ns | 19.4x | **23.4x** | 4.2x | 2.8x |
+| `float32` | 4 Ki | 11.2 ns | 3.7x | **4.5x** | 3.0x | 1.2x |
+| `float32` | 64 Ki | 45.4 ns | 14.8x | **19.6x** | 4.7x | 2.3x |
+| `float32` | 1 Mi | 57.7 ns | 18.5x | **24.2x** | 5.4x | 2.7x |
+| `uint64` | 4 Ki | 5.3 ns ‡ | 1.1x | 1.2x | **2.2x** | 1.1x |
+| `uint64` | 64 Ki | 38.0 ns | 7.5x | **9.6x** | 5.8x | 3.0x |
+| `uint64` | 1 Mi | 47.5 ns | **8.2x** | 6.3x ‡ | 5.1x | 3.3x |
+| `float64` | 4 Ki | 4.2 ns | 0.7x | **0.8x** | 0.7x | 0.4x |
+| `float64` | 64 Ki | 43.6 ns | 7.3x | **8.9x** | 4.1x | 2.0x |
+| `float64` | 1 Mi | 55.6 ns | **7.9x** | 6.5x | 3.9x | 2.1x |
+
+‡ At `uint64` 4 Ki it is `sort` itself that moved, from 4.5 to 5.7 ns, taking
+every ratio in the row with it. At 1 Mi `lsb[11]` measured 12.8, 7.6 and
+7.4 ns. The 64-bit rows at 1 Mi are the least stable measurement on this
+machine — see [Digit width](#digit-width).
+
+A few things worth reading off those tables.
 
 **`american_flag_sort` is not the one to use for speed.** At 4 Ki it loses to
-`sort` outright on four of the seven types. It differs from `msb_radix_sort`
-only in permuting in place rather than through a scratch buffer, and pays two
-to five times over for it. Its reason to exist is that it touches no heap
-memory at all.
+`sort` outright on four of the seven types on the M4, and five on the Ryzen.
+It differs from `msb_radix_sort` only in permuting in place rather than
+through a scratch buffer, and pays 1.5 to 7.3 times over for it across the two
+machines. Its reason to exist is that it touches no heap memory at all.
 
 **`msb_radix_sort` wins exactly once** — `uint64` at 4 Ki, where stopping early
-beats making six full passes. Everywhere else the LSD sort is ahead.
+beats making six full passes. Everywhere else the LSD sort is ahead, on both
+machines.
 
 **The narrow types gain most.** A `uint8` needs one pass over 1 byte per
 element; a `uint64` needs six passes over 8 bytes each. Between those two, at
 64 Ki, the radix sort's cost rises 6.3x (0.70 to 4.42 ns/element) while the
 comparison sort's rises only 1.7x — and 6.3 / 1.7 is exactly the 3.7x by which
-the two speedups differ.
+the two speedups differ. On the Ryzen the same pair is 5.8x (0.69 to 3.97)
+against 1.8x, and the speedups differ by 3.1x.
+
+**The Ryzen prefers `lsb[8]` for 64-bit types at 1 Mi**, in all three runs:
+5.8 against 7.6 ns/element for `uint64`, 7.0 against 8.6 for `float64`.
+`radix_sort` uses `BITS=11` there, so on this machine it leaves about a fifth
+on the table. The next section has more.
 
 ### Digit width
 
@@ -306,19 +358,41 @@ The four LSD sorts this package replaced differed only in their digit width —
 | `BITS=13` | 3.76 | 2.72 | 7.66 | 5.17 |
 | `BITS=16` | 12.56 | 3.61 | 24.91 | 7.70 |
 
-**An 11-bit digit wins for every 32- and 64-bit type at every size measured**,
-and an 8-bit digit for everything narrower. Two cases, not the four-way table
-the original implied.
+On the M4, **an 11-bit digit wins for every 32- and 64-bit type at every size
+measured**, and an 8-bit digit for everything narrower. Two cases, not the
+four-way table the original implied.
+
+The Ryzen agrees at 4 Ki and 64 Ki, and not at 1 Mi:
+
+| | `uint32` 4 Ki | `uint32` 1 Mi | `uint64` 4 Ki | `uint64` 1 Mi |
+| --- | ---: | ---: | ---: | ---: |
+| `BITS=4` | 4.68 | 4.94 | 10.80 | 13.17 |
+| `BITS=8` | 2.39 | 2.43 | 5.03 | 5.76 ‡ |
+| `BITS=10` | 2.71 | 2.58 | 4.84 | **5.71** |
+| `BITS=11` | **2.23** | 2.02 | **4.53** | 8.63 ‡ |
+| `BITS=13` | 3.32 | 2.14 | 5.86 | 8.00 ‡ |
+| `BITS=16` | 8.47 | **1.99** | 18.75 | 8.78 ‡ |
+
+For 64-bit types at 1 Mi a 10-bit digit takes about a third less time than an
+11-bit one — `float64` too, 5.75 against 9.04 ns. Every cell in that column
+moved between runs, but the order did not: `BITS=11` took at least 1.38 times
+as long as `BITS=10` in every run. A guess at why, not a measurement: two 1 Mi
+`uint64` buffers are 16 MiB, the size of this core's whole L3, and whether the
+kernel backs them with huge pages varies from run to run. For `uint32` at
+1 Mi, 11, 12 and 16 bits are within 2% of each other.
 
 `BITS=16` is the instructive row. Four passes instead of six looks like a clear
 win and is not: four 65 536-counter histograms are 1 MiB, written twice before
 any data moves. At 4 Ki that fixed cost makes it the *slowest* width in the
-sweep — 24.9 ns/element against 4.5 for `BITS=11` — and it never catches up.
+sweep — 24.9 ns/element against 4.5 for `BITS=11` on the M4, 18.7 against
+4.5 on the Ryzen — and on the M4 it never catches up.
 
-One case is left on the table: `float64` at 64 Ki and above prefers `BITS=13`
-by about 9% (5.45 vs 6.01 ns at 1 Mi, confirmed across two runs). The
-dispatcher uses 11 for all 64-bit types rather than carry a size-dependent
-special case for one of them.
+One case is left on the table on the M4: `float64` at 64 Ki and above prefers
+`BITS=13` by about 9% (5.45 vs 6.01 ns at 1 Mi, confirmed across two runs).
+The Ryzen shows the same at 64 Ki (4.40 vs 4.90) and prefers `BITS=10` at
+1 Mi. The dispatcher uses 11 for all 64-bit types rather than carry a
+size-dependent special case — which on the Ryzen costs every 64-bit type at
+1 Mi, not just one.
 
 ### Repetition and key width
 
@@ -341,20 +415,39 @@ changes what a radix sort does. `uint32`, 1 Mi elements,
 | 24 bits | 44.53 | **2.77** | 9.19 | 18.05 |
 | 32 bits | 45.26 | **2.23** | 8.44 | 17.16 |
 
+On the Ryzen:
+
+| distinct values | `sort` | `lsb[11]` | `msb` | `aflag` |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | **0.46** | 0.67 | 1.46 | 1.46 |
+| 4 | 5.04 | **1.94** | 2.16 | 5.71 |
+| 256 | 20.41 | **1.77** | 2.78 | 8.03 |
+| 65 536 | 42.45 | **2.37** | 6.12 | 11.57 |
+| all distinct | 46.16 | **1.98** | 8.56 | 13.75 |
+
+| key width | `sort` | `lsb[11]` | `msb` | `aflag` |
+| ---: | ---: | ---: | ---: | ---: |
+| 8 bits | 20.45 | **1.11** | 1.96 | 4.75 |
+| 16 bits | 42.73 | **1.52** | 2.49 | 7.87 |
+| 24 bits | 46.30 | **2.12** | 8.95 | 14.13 |
+| 32 bits | 46.25 | **1.99** | 8.57 | 13.75 |
+
 The comparison sort gets steadily faster as values repeat — equal elements are
 cheap to partition around, and at one distinct value it is the fastest thing
 in the table. The LSD sort barely notices repetition at all. What it
 notices is the *width* of the keys, because a pass whose digit never varies is
 skipped entirely: 8-bit data in a `uint32` takes one pass instead of three and
-runs about **1.6x** faster than full-width data. Less than three times,
-because the single read that builds every pass's histogram is paid either way.
+runs about **1.6x** faster than full-width data (1.8x on the Ryzen). Less
+than three times, because the single read that builds every pass's histogram
+is paid either way.
 
 One row in that table is not explained. **24-bit keys are consistently slower
 than 32-bit ones** — 2.77 against 2.23 ns — across three separate runs, for
 every one of the three radix sorts, although both widths need exactly the same
 number of passes. Something about the narrower top digit costs more than the
 wider one, and I have not worked out what. It is left in rather than smoothed
-over.
+over. It is not an M4 quirk: the Ryzen shows it too, for all three radix sorts
+in both runs (`lsb[11]` 2.12 against 1.99 ns).
 
 The benchmark this replaces varied both knobs at once and reported it as one,
 which is how the same table came to show radix at 0.12x and at 26x —
@@ -375,9 +468,21 @@ from a whole book: half a million keys, four shapes.
 | lines | 50 886 | 61.7 B | 7.7 B | 13% | 119.0 ns | 103.4 ns | **1.16x** |
 | phrases | 562 482 | 33.0 B | 10.3 B | 31% | 143.3 ns | 147.9 ns | 0.97x |
 
+On the Ryzen:
+
+| corpus | keys | mean len | prefix | prefix % | `sort` | `radix_sort` | net |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| tokens | 563 286 | 4.8 B | 4.6 B | 96% | 77.4 ns | 33.0 ns | **2.41x** |
+| vocabulary | 41 548 | 8.5 B | 5.8 B | 68% | 115.8 ns | 60.2 ns | **1.94x** |
+| lines | 51 861 | 61.9 B | 8.1 B | 13% | 186.3 ns | 95.5 ns | **2.04x** |
+| phrases | 563 280 | 33.7 B | 10.5 B | 31% | 227.9 ns | 163.3 ns | **1.42x** |
+
 Nanoseconds per key, and the speedup net of the `List[String]` copy each
-iteration needs to start from unsorted input. Two clean runs agreed to within
-3% on every row.
+iteration needs to start from unsorted input. On each machine two clean runs
+agreed to within 3% on every row. The key counts differ between the machines
+by up to 2%, so they did not sort byte-identical text. Project Gutenberg
+serves the book with CRLF line endings; `setup.sh` strips them, since a kept
+`\r` would end every line key and turn every blank line into a key.
 
 *tokens* is every whitespace-separated word in order, so it repeats heavily —
 the hundred commonest words are about half the text. *vocabulary* is the
@@ -393,6 +498,14 @@ path-like keys (`pixi run bench-strings`):
 | 100 000 | 20.5 B | 137.8 ns | 95.7 ns | **1.45x** |
 | 100 000 | 66.5 B | 172.8 ns | 178.2 ns | 0.97x |
 
+On the Ryzen:
+
+| keys | shared prefix | `sort` | `radix_sort` | net |
+| ---: | ---: | ---: | ---: | ---: |
+| 100 000 | 7.5 B | 127.8 ns | 65.7 ns | **1.97x** ‡ |
+| 100 000 | 20.5 B | 202.4 ns | 85.3 ns | **2.45x** |
+| 100 000 | 66.5 B | 208.0 ns | 139.0 ns | **1.54x** |
+
 **A deep shared prefix is what costs.** This sort advances one byte per
 recursion level, so a 66-byte shared prefix means 66 full histogram passes
 over the range, each finding a single occupied bucket, before the keys begin
@@ -401,12 +514,20 @@ word-at-a-time memcmp. That is the one mechanism here that both tables agree
 on, and the fix — advancing eight bytes at a time when a level has one
 occupied bucket — is in [`docs/improvements.md`](docs/improvements.md).
 
+On the Ryzen the prefix still costs — 2.45x falls to 1.54x between 20.5 and
+66.5 shared bytes — but not down to parity, because both sides move: at
+66.5 B the comparison sort is slower there than on the M4 (208 against
+173 ns) and the radix sort faster (139 against 178).
+
 **Prefix depth alone does not order every row, though.** *lines* shares only
 7.7 bytes and manages 1.16x, while path keys sharing 7.5 bytes manage 1.77x.
 The difference between them is key length — 61.7 bytes against about 20 — so
-length is doing something too, and I have not separated the two effects. What
-the tables support is the pairing: **short keys, shallow prefixes, a clear
-win; long keys or deep prefixes, parity.**
+length is doing something too, and I have not separated the two effects. The
+Ryzen does not show that gap at all — *lines* 2.04x against 1.97x — so
+whatever length is doing depends on the machine. On the M4 the tables support
+the pairing **short keys, shallow prefixes, a clear win; long keys or deep
+prefixes, parity.** On the Ryzen `radix_sort` won every corpus of 10 000 keys
+or more, by 1.36x at worst.
 
 ### The dispatch threshold
 
@@ -421,10 +542,26 @@ win; long keys or deep prefixes, parity.**
 | 2048 | 6.89 | 4.84 | **4.80** |
 | 4096 | 8.06 | 4.08 | **4.08** |
 
-At n=16 the kernel is a hundred times slower than the comparison sort, all of
-it histogram. The threshold is derived from the histogram size rather than
-tabulated per type: each pass costs at least about 64 elements' worth of work,
-and more once its histogram is large.
+On the Ryzen:
+
+| n | `sort` | `lsb[11]` | `radix_sort` |
+| ---: | ---: | ---: | ---: |
+| 16 | 2.16 | 180.58 | **2.03** ‡ |
+| 256 | 2.76 | 14.75 | **2.75** |
+| 1024 | **3.21** | 6.53 | 3.25 |
+| 2048 | **3.50** | 5.14 | 5.13 |
+| 4096 | 5.10 ‡ | 4.75 | **4.48** |
+
+At n=16 the kernel is a hundred times slower than the comparison sort on the
+M4 and 84 times on the Ryzen, all of it histogram. The threshold is derived
+from the histogram size rather than tabulated per type: each pass costs at
+least about 64 elements' worth of work, and more once its histogram is large.
+
+**That derivation does not carry over to the Ryzen for `uint64`.** There
+`radix_sort` stops falling back at n = 1536, but the kernel does not beat
+`sort` until about 4096: at 2048 `radix_sort` takes 5.13 ns/element against
+3.50 for `sort`, 1.5x slower, in both runs. For `uint8`, `uint16` and `uint32`
+the thresholds match the crossover as closely as the measured sizes can tell.
 
 ## Development
 
@@ -455,7 +592,10 @@ from a clean checkout.
 
 Benchmarks are sensitive to anything else running on the machine — an
 unrelated `git add` during a run moved one row by 50%. Run them on an
-otherwise idle box, and re-run before believing a number.
+otherwise idle box, and re-run before believing a number. On a CPU with two
+kinds of core, pin the run to a full-size one — the Ryzen figures above come
+from `taskset -c 2 pixi run bench` and friends — or the scheduler decides
+which core you measured.
 
 ## Provenance
 
