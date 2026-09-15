@@ -352,15 +352,24 @@ The four LSD sorts this package replaced differed only in their digit width —
 
 | | `uint32` 4 Ki | `uint32` 1 Mi | `uint64` 4 Ki | `uint64` 1 Mi |
 | --- | ---: | ---: | ---: | ---: |
-| `BITS=4` | 6.56 | 7.58 | 12.90 | 16.20 |
-| `BITS=8` | 2.24 | 3.74 | 4.22 | 6.36 |
-| **`BITS=11`** | **2.10** | **2.20** | **4.48** | **4.84** |
-| `BITS=13` | 3.76 | 2.72 | 7.66 | 5.17 |
-| `BITS=16` | 12.56 | 3.61 | 24.91 | 7.70 |
+| `BITS=4` | 6.59 | 7.55 | 13.03 | 16.14 |
+| `BITS=6` | 4.19 | 4.92 | 7.08 | 9.55 |
+| `BITS=8` | 2.19 | 3.72 | 4.26 ‡ | 6.34 |
+| `BITS=10` | 2.93 | 3.15 | 4.56 | 5.70 |
+| **`BITS=11`** | **2.08** | **2.20** | **4.14** | **4.82** |
+| `BITS=12` | 2.53 | 2.45 | 5.92 | 5.33 |
+| `BITS=13` | 3.76 | 2.75 | 7.64 | 5.18 |
+| `BITS=16` | 12.59 | 3.60 | 24.64 | 7.55 |
 
-On the M4, **an 11-bit digit wins for every 32- and 64-bit type at every size
-measured**, and an 8-bit digit for everything narrower. Two cases, not the
+Medians of eight runs; ‡ marks a cell that moved by more than 20% between
+them. On the M4, **an 11-bit digit wins for every 32- and 64-bit type at every
+size measured**, and an 8-bit digit for everything narrower. Two cases, not the
 four-way table the original implied.
+
+The one width the two machines disagree about most flatly is 10. On the Ryzen
+it is the best choice for 64-bit types at 1 Mi; on the M4 it never wins
+anything — `BITS=11` beat it in 8 runs out of 8 in all six 64-bit cases, by
+8% at 4 Ki rising to 18% at 1 Mi.
 
 The Ryzen agrees only in part:
 
@@ -390,11 +399,12 @@ with huge pages varies from run to run.
 `BITS=16` is the instructive row. Four passes instead of six looks like a clear
 win and is not: four 65 536-counter histograms are 1 MiB, written twice before
 any data moves. At 4 Ki that fixed cost makes it the *slowest* width in the
-sweep — 24.9 ns/element against 4.5 for `BITS=11` on the M4, 18.7 against
+sweep — 24.6 ns/element against 4.1 for `BITS=11` on the M4, 18.7 against
 4.5 on the Ryzen — and on the M4 it never catches up.
 
 One case is left on the table on the M4: `float64` at 64 Ki and above prefers
-`BITS=13` by about 9% (5.45 vs 6.01 ns at 1 Mi, confirmed across two runs).
+`BITS=13` — by 5% at 64 Ki (5.48 against 5.79 ns) and 11% at 1 Mi (5.42
+against 6.04), in 8 runs out of 8 at both sizes.
 The Ryzen shows the same at 64 Ki (4.42 vs 4.92) and prefers `BITS=10` at
 1 Mi. The dispatcher uses 11 for all 64-bit types rather than carry a
 size-dependent special case — which on the Ryzen costs every 64-bit type at
@@ -469,10 +479,10 @@ from a whole book: half a million keys, four shapes.
 
 | corpus | keys | mean len | prefix | prefix % | `sort` | `radix_sort` | net |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| tokens | 562 488 | 4.7 B | 4.5 B | 96% | 67.8 ns | 39.5 ns | **1.73x** |
-| vocabulary | 41 621 | 8.0 B | 5.6 B | 70% | 101.9 ns | 55.0 ns | **1.87x** |
-| lines | 50 886 | 61.7 B | 7.7 B | 13% | 119.0 ns | 103.4 ns | **1.16x** |
-| phrases | 562 482 | 33.0 B | 10.3 B | 31% | 143.3 ns | 147.9 ns | 0.97x |
+| tokens | 563 286 | 4.8 B | 4.6 B | 96% | 68.7 ns | 40.5 ns | **1.71x** |
+| vocabulary | 41 548 | 8.5 B | 5.8 B | 68% | 101.6 ns | 54.6 ns | **1.87x** |
+| lines | 51 861 | 61.9 B | 8.1 B | 13% | 121.7 ns | 109.2 ns | **1.12x** |
+| phrases | 563 280 | 33.7 B | 10.5 B | 31% | 146.0 ns | 148.5 ns | 0.98x |
 
 On the Ryzen:
 
@@ -485,10 +495,16 @@ On the Ryzen:
 
 Nanoseconds per key, and the speedup net of the `List[String]` copy each
 iteration needs to start from unsorted input. On each machine two clean runs
-agreed to within 3% on every row. The key counts differ between the machines
-by up to 2%, so they did not sort byte-identical text. Project Gutenberg
-serves the book with CRLF line endings; `setup.sh` strips them, since a kept
-`\r` would end every line key and turn every blank line into a key.
+agreed to within 3% on every row, and both machines sorted the same text —
+the key counts match exactly.
+
+An earlier version of this table had them differing by 2%, and blamed CRLF.
+That was wrong: the M4 column had been measured on a hand-supplied copy of the
+book rather than on what `setup.sh` fetches, which is a different edition with
+no Project Gutenberg front matter. Both columns now come from the documented
+command. (The CRLF stripping in `setup.sh` is real and necessary — a kept
+`\r` would end every line key and turn every blank line into a key — it just
+was not the cause here.)
 
 *tokens* is every whitespace-separated word in order, so it repeats heavily —
 the hundred commonest words are about half the text. *vocabulary* is the
@@ -526,8 +542,8 @@ On the Ryzen the prefix still costs — 2.45x falls to 1.54x between 20.5 and
 173 ns) and the radix sort faster (139 against 178).
 
 **Prefix depth alone does not order every row, though.** *lines* shares only
-7.7 bytes and manages 1.16x, while path keys sharing 7.5 bytes manage 1.77x.
-The difference between them is key length — 61.7 bytes against about 20 — so
+8.1 bytes and manages 1.12x, while path keys sharing 7.5 bytes manage 1.77x.
+The difference between them is key length — 61.9 bytes against about 20 — so
 length is doing something too, and I have not separated the two effects. The
 Ryzen does not show that gap at all — *lines* 2.04x against 1.97x — so
 whatever length is doing depends on the machine. On the M4 the tables support
