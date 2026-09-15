@@ -26,7 +26,9 @@ from std.benchmark import keep
 from std.random import seed
 from std.sys.info import bit_width_of
 
-comptime _SIZES = [1 << 12, 1 << 16, 1 << 20]
+comptime _SIZES = [1 << 12, 1 << 16, 1 << 18, 1 << 19, 1 << 20]
+"""4 Ki to 1 Mi. 256 Ki and 512 Ki are there to find where a 64-bit type stops
+preferring `BITS=11` and starts preferring `BITS=10`."""
 comptime _WIDTHS = [4, 6, 8, 10, 11, 12, 13, 16]
 
 
