@@ -9,8 +9,8 @@ A comparison sort asks "is this one smaller?" about `n log n` pairs. A radix
 sort never asks: it reads the digits of a key and puts each element where its
 digits say it belongs. The work is then proportional to the number of digits
 rather than to `log n`, and on fixed-width numeric data that trade is very
-one-sided — **7 to 28 times faster than the stdlib's `sort`**, with the
-narrower types gaining the most.
+one-sided — on an array of 64 Ki elements or more it is **7 to 28 times
+faster than the stdlib's `sort`**, with the narrower types gaining the most.
 
 ```mojo
 from mm_radix_sort import radix_sort
@@ -33,10 +33,11 @@ public too, for when you know something it does not.
 
 ## When to use it
 
-**For numbers, above a few hundred of them, always.** The margin is large
-enough that there is not much to weigh up. It grows as the type gets narrower,
-because a narrow key has fewer digits to walk: a `uint8` sorts up to **27.8x**
-faster than `sort`, a `uint64` **9.2x**.
+**For numbers, above a few thousand of them, always.** The margin is large
+enough that there is not much to weigh up, and it grows both with the size of
+the array and as the type gets narrower — a narrow key has fewer digits to
+walk. At 64 Ki elements a `uint8` sorts **27.8x** faster than `sort` and a
+`uint64` **7.6x**; at 4 Ki those become 8.4x and 2.3x.
 
 **Below the crossover, don't.** A radix pass writes its whole histogram twice —
 once to zero it, once to prefix-sum it — whether you give it ten elements or
@@ -122,14 +123,111 @@ the key does not cover.
 
 ## API
 
-| | |
-| --- | --- |
-| `radix_sort(span)` | Scalars. Dispatches on type and size. |
-| `radix_sort(span)` | `Span[String]`. Byte order, which over UTF-8 is codepoint order. |
-| `lsb_radix_sort[BITS=8](span)` | Least-significant-digit, `BITS` wide, 1–16. |
-| `msb_radix_sort(span)` | Most-significant-digit, out of place. |
-| `american_flag_sort(span)` | Most-significant-digit, in place, no heap. |
-| `byte_radix_sort[byte_of, less](span)` | Any variable-length byte key. |
+Every entry point sorts ascending, in place, and returns nothing.
+
+| | element | heap | stack | equal keys |
+| --- | --- | --- | --- | --- |
+| `radix_sort(span)` | `Scalar[D]` | one scratch + histogram † | — | kept in order |
+| `radix_sort(span)` | `String` | none | ~2 KiB per level | may reorder |
+| `lsb_radix_sort[BITS=8](span)` | `Scalar[D]` | one scratch + histogram | — | kept in order |
+| `msb_radix_sort(span)` | `Scalar[D]` | one scratch + counters | — | kept in order |
+| `american_flag_sort(span)` | `Scalar[D]` | none | 2 KiB per key byte | may reorder |
+| `byte_radix_sort[byte_of, less](span)` | any `Movable` | none | ~2 KiB per level | may reorder |
+
+† None below the fallback threshold, where it calls `sort`.
+
+"Kept in order" is unobservable when the element *is* the key, which for the
+scalar sorts it always is. It matters for `byte_radix_sort`, where an element
+can carry a payload the key does not cover — and there the answer is that the
+order is **not** kept, because the partition is a cyclic permutation.
+
+`BITS` must be 1–16. `lsb_radix_sort` counts with `UInt32`, so the span must
+hold fewer than 2^32 elements.
+
+## How it works
+
+### Every key becomes an unsigned integer first
+
+A radix sort compares *digits of an unsigned integer*, so before it can touch
+a value it needs an order-preserving bijection onto one: `a < b` must imply
+`ordered(a) < ordered(b)` under unsigned comparison.
+
+For unsigned integers that map is the identity. For two's-complement signed
+integers it is a flip of the sign bit, which moves the negative half below the
+positive half:
+
+| `Int8` | raw | ordered |
+| ---: | ---: | ---: |
+| `-128` | `128` | `0` |
+| `-1` | `255` | `127` |
+| `0` | `0` | `128` |
+| `127` | `127` | `255` |
+
+Floats need more. IEEE 754 is *almost* ordered as an integer already —
+positives ascend correctly — but negatives ascend in the wrong direction and
+sit above every positive. Flipping the sign bit of a positive and **every** bit
+of a negative fixes both at once:
+
+| `Float32` | raw | ordered |
+| ---: | ---: | ---: |
+| `-inf` | `0xFF800000` | `0x007FFFFF` |
+| `-2.0` | `0xC0000000` | `0x3FFFFFFF` |
+| `-1.0` | `0xBF800000` | `0x407FFFFF` |
+| `-0.0` | `0x80000000` | `0x7FFFFFFF` |
+| `0.0` | `0x00000000` | `0x80000000` |
+| `1.0` | `0x3F800000` | `0xBF800000` |
+| `2.0` | `0x40000000` | `0xC0000000` |
+
+The ordered column ascends; the raw one does not. Branchlessly, that is
+
+```mojo
+var mask = (0 - (raw >> (WIDTH - 1))) | SIGN_BIT
+return raw ^ mask
+```
+
+— arithmetic-shifting the sign bit down to all-ones for a negative or
+all-zeros for a positive, then forcing the sign bit on.
+
+This lives in `_bits.mojo` and is defined once. The implementation this package
+was ported from carried six copies of it across four files, two of them
+byte-for-byte identical.
+
+### Least significant digit first, or most
+
+**LSD** (`lsb_radix_sort`) reads the array once to histogram *every* pass's
+digits at the same time, turns each histogram into bucket offsets, then makes
+one stable scatter per pass, least significant digit first. After the last
+pass the array is sorted. It is the fastest thing here for almost everything,
+because each pass is a linear read and a linear-ish write with no branching.
+
+Two shortcuts matter. If the first read finds the array already ordered, it
+stops. And a pass whose digit is the same for every element is skipped — its
+scatter would be the identity — which is why 8-bit data in a `uint32` costs
+one pass instead of three.
+
+**MSD** (`msb_radix_sort`, `american_flag_sort`) partitions on the *top* digit
+and recurses into each bucket. That stops early — once a bucket holds few
+enough elements the remaining digits are never looked at — and each
+sub-problem soon fits in cache. It wins on `uint64` at 4 Ki, where six full
+LSD passes cost more than stopping early, and nowhere else measured.
+
+The two MSD variants differ only in the partition step: `msb_radix_sort`
+copies the range aside and scatters it back, `american_flag_sort` permutes in
+place with cyclic swaps. Permuting in place costs between **1.8x and 7.3x**
+across the measured grid — widest on the narrow types — and buys you a sort
+that never touches the heap.
+
+### Variable-length keys need a 257th bucket
+
+`byte_radix_sort` uses **257 buckets, not 256**. Bucket 0 means *this key has
+no byte at this depth*, and a real byte `b` lands in bucket `b + 1`.
+
+That one extra bucket is what makes `"ab"` sort before `"abc"` with no length
+comparison anywhere — the short key simply falls into bucket 0 and lands
+first. It also removes a whole class of bug: a key that has run out is
+answered by the extractor returning `-1`, not by loading a byte that is not
+there. The ported implementation did load it, and read past the end of any
+string whose duplicates drove the recursion below its own length.
 
 ## Performance
 
@@ -187,8 +285,11 @@ memory at all.
 **`msb_radix_sort` wins exactly once** — `uint64` at 4 Ki, where stopping early
 beats making six full passes. Everywhere else the LSD sort is ahead.
 
-**The narrow types gain most.** A `uint8` needs one pass and a 256-counter
-histogram; a `uint64` needs six passes over data twice as wide.
+**The narrow types gain most.** A `uint8` needs one pass over 1 byte per
+element; a `uint64` needs six passes over 8 bytes each. Between those two, at
+64 Ki, the radix sort's cost rises 6.3x (0.70 to 4.42 ns/element) while the
+comparison sort's rises only 1.7x — and 6.3 / 1.7 is exactly the 3.7x by which
+the two speedups differ.
 
 ### Digit width
 
@@ -221,26 +322,38 @@ special case for one of them.
 ### Repetition and key width
 
 Two properties get conflated under "low cardinality", and only one of them
-changes what a radix sort does. `uint32`, 1 Mi elements, `pixi run
-bench-cardinality`:
+changes what a radix sort does. `uint32`, 1 Mi elements,
+`pixi run bench-cardinality`:
 
 | distinct values | `sort` | `lsb[11]` | `msb` | `aflag` |
 | ---: | ---: | ---: | ---: | ---: |
-| 4 | 4.84 | 4.76 | **2.64** | 6.75 |
-| 256 | 19.56 | **4.82** | 6.71 | 13.29 |
-| 65 536 | 40.40 | **3.53** | 6.08 | 14.37 |
-| all distinct | 44.23 | **2.19** | 8.27 | 16.95 |
+| 1 | **0.57** | 0.66 | 1.32 | 1.33 |
+| 4 | 4.78 | 4.64 | **2.64** | 6.74 |
+| 256 | 19.54 | **4.82** | 6.84 | 13.40 |
+| 65 536 | 40.16 | **3.50** | 6.10 | 14.39 |
+| all distinct | 44.35 | **2.19** | 8.27 | 16.76 |
 
 | key width | `sort` | `lsb[11]` | `msb` | `aflag` |
 | ---: | ---: | ---: | ---: | ---: |
-| 8 bits | 19.39 | **2.00** | 2.13 | 7.23 |
-| 16 bits | 41.39 | **2.35** | 3.58 | 12.70 |
-| 32 bits | 44.46 | **2.18** | 8.30 | 16.83 |
+| 8 bits | 19.29 | **1.32** | 2.14 | 7.20 |
+| 16 bits | 40.82 | **1.86** | 3.47 | 12.73 |
+| 24 bits | 44.53 | **2.77** | 9.19 | 18.05 |
+| 32 bits | 45.26 | **2.23** | 8.44 | 17.16 |
 
-The comparison sort gets faster as values repeat, because equal elements are
-cheap to partition around. The LSD sort mostly does not care: its cost tracks
-the *width* of the keys, since a pass whose digit never varies is skipped
-entirely. Narrow 8-bit data costs one pass instead of three.
+The comparison sort gets steadily faster as values repeat — equal elements are
+cheap to partition around, and at one distinct value it is the fastest thing
+in the table. The LSD sort barely notices repetition at all. What it
+notices is the *width* of the keys, because a pass whose digit never varies is
+skipped entirely: 8-bit data in a `uint32` takes one pass instead of three and
+runs about **1.6x** faster than full-width data. Less than three times,
+because the single read that builds every pass's histogram is paid either way.
+
+One row in that table is not explained. **24-bit keys are consistently slower
+than 32-bit ones** — 2.77 against 2.23 ns — across three separate runs, for
+every one of the three radix sorts, although both widths need exactly the same
+number of passes. Something about the narrower top digit costs more than the
+wider one, and I have not worked out what. It is left in rather than smoothed
+over.
 
 The benchmark this replaces varied both knobs at once and reported it as one,
 which is how the same table came to show radix at 0.12x and at 26x —
