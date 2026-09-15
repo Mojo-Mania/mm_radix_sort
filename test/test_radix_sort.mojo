@@ -147,6 +147,33 @@ def test_floats_span_zero() raises:
     _assert_matches_sort(values^, "float32 spanning zero")
 
 
+def test_half_precision_extremes() raises:
+    """The ends of both 16-bit formats, which differ from each other."""
+    var halves: List[Float16] = [
+        Float16.MIN,
+        Float16.MAX,
+        Float16(0.0),
+        Float16(-0.0),
+        Float16(1.0),
+        Float16(-1.0),
+        Float16(6.104e-5),
+        Float16(-6.104e-5),
+    ]
+    _assert_matches_sort(halves^, "float16 extremes")
+
+    var brains: List[BFloat16] = [
+        BFloat16.MIN,
+        BFloat16.MAX,
+        BFloat16(0.0),
+        BFloat16(-0.0),
+        BFloat16(1.0),
+        BFloat16(-1.0),
+        BFloat16(1e-38),
+        BFloat16(-1e-38),
+    ]
+    _assert_matches_sort(brains^, "bfloat16 extremes")
+
+
 def test_float_special_values() raises:
     """Zeroes, denormals and infinities, but never NaN -- it has no order."""
     var values = [
@@ -200,8 +227,21 @@ def test_every_width_and_sign() raises:
 
 
 def test_float_widths() raises:
+    """Every floating-point width, including the two 16-bit ones.
+
+    `float16` and `bfloat16` are the same width and sort through the same
+    16-bit path, but they are not the same layout -- `bfloat16` spends eight
+    bits on the exponent where `float16` spends five. The order-preserving
+    mapping never looks at that split, only at the sign bit, which is why one
+    branch covers both; these cases are what says so.
+    """
     seed(6)
-    comptime dtypes = [DType.float32, DType.float64]
+    comptime dtypes = [
+        DType.float16,
+        DType.bfloat16,
+        DType.float32,
+        DType.float64,
+    ]
     comptime for d in range(len(dtypes)):
         comptime dtype = dtypes[d]
         for count in [1, 2, 65, 1000, 3000]:
@@ -211,6 +251,25 @@ def test_float_widths() raises:
             _assert_matches_sort(
                 values^, String(dtype, " with ", count, " elements")
             )
+
+
+def test_half_precision_saturates_its_key_space() raises:
+    """A 16-bit float has 65 536 possible bit patterns and no more.
+
+    Sorting a million of them means most keys repeat thousands of times, which
+    is the tie-heavy case the scalar sorts otherwise never see at scale.
+    """
+    seed(11)
+    var count = 200_000
+    var values = List[Float16](unsafe_uninit_length=count)
+    for i in range(count):
+        values[i] = Float16(random_float64() * 2000.0 - 1000.0)
+    _assert_matches_sort(values^, "200k float16, heavily repeated")
+
+    var wide = List[BFloat16](unsafe_uninit_length=count)
+    for i in range(count):
+        wide[i] = BFloat16(random_float64() * 2000.0 - 1000.0)
+    _assert_matches_sort(wide^, "200k bfloat16, heavily repeated")
 
 
 def test_crosses_the_dispatch_threshold() raises:

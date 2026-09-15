@@ -50,6 +50,29 @@ Worth separating before assuming the chunked skip fixes both.
 keeps the cutoff cheap on shared-prefix data. For `String` the comparator then
 walks byte by byte. The same word-at-a-time treatment applies.
 
+## A 16-bit digit for 16-bit types above 64 Ki
+
+The dispatcher picks an 8-bit digit for everything 16 bits and narrower. For
+the two 16-bit floats that is right only below 64 Ki. A 16-bit digit sorts them
+in a *single* pass, and once the array is big enough to amortise its 65 536
+counters it wins outright. Matched method, medians of three runs, ns/element:
+
+| | `float16` 4 Ki | `float16` 64 Ki | `float16` 1 Mi | `bfloat16` 4 Ki | `bfloat16` 64 Ki | `bfloat16` 1 Mi |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `BITS=8` (2 passes) | **1.72** | 1.70 | 1.69 | **2.52** | 2.55 | 2.51 |
+| `BITS=16` (1 pass) | 6.27 | **1.43** | **1.33** | 6.09 | **1.32** | **1.05** |
+
+So `radix_sort` is leaving 1.19x on the table for `float16` at 1 Mi and
+**2.39x** for `bfloat16`. The crossover sits between 4 Ki and 64 Ki, which is
+where the existing `PER_PASS` arithmetic would put it: a 65 536-bucket
+histogram at the current "one eighth of the histogram" rule gives 8 192.
+
+Taking it means making `BITS` depend on the runtime size, not just the type —
+the dispatcher currently chooses the digit width at compile time and only the
+*fallback* at runtime. That is a real change to its shape, which is why it is
+written down rather than done. It also applies to `uint16` and `int16`, which
+have not been measured this way.
+
 ## A 13-bit digit for `float64`
 
 The dispatcher uses an 11-bit digit for every 32- and 64-bit type. That is

@@ -11,6 +11,11 @@ or not there is enough data to fill it. Below, the cost of that fixed overhead
 is visible as the small-n columns getting worse as `BITS` grows while the
 large-n columns get better.
 
+The 16-bit types are the one place a 16-bit digit is not obviously absurd:
+it sorts them in a single pass. Whether one pass over a 256 KiB histogram
+beats two over a 1 KiB one is the question the `float16` and `bfloat16` rows
+answer.
+
 Times are nanoseconds per element, refill included. Lower is better.
 """
 
@@ -62,6 +67,8 @@ def bench_dtype[D: DType]() raises:
 def main() raises:
     print("Nanoseconds per element, refill included. Lower is better.")
     print("(Np) is how many passes that digit width needs for the type.\n")
+    bench_dtype[DType.float16]()
+    bench_dtype[DType.bfloat16]()
     bench_dtype[DType.uint32]()
     bench_dtype[DType.float32]()
     bench_dtype[DType.uint64]()

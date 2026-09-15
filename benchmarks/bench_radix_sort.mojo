@@ -6,6 +6,13 @@ reported as a floor so it can be read off rather than subtracted out.
 
 Times are nanoseconds per element, so they are comparable down a column as
 well as across one. The speedup is against `sort` on the same input.
+
+The two 16-bit floats are worth reading together. They are the same width and
+take the same path, but `bfloat16` spends eight bits on the exponent where
+`float16` spends five, so the same range of values spreads across the digits
+differently. Both also have only 65 536 possible bit patterns, which at a
+million elements means every key repeats about sixteen times -- the comparison
+sort gets something out of that and the radix sort does not care.
 """
 
 from benchmarks.format import fixed, ljust, rjust
@@ -101,6 +108,8 @@ def main() raises:
     comptime dtypes = [
         DType.uint8,
         DType.int16,
+        DType.float16,
+        DType.bfloat16,
         DType.uint32,
         DType.int32,
         DType.float32,

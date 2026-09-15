@@ -268,6 +268,12 @@ absolute cost in nanoseconds per element.
 | `int16` | 4 Ki | 8.3 ns | **6.2x** | 4.4x | 1.7x | 0.8x |
 | `int16` | 64 Ki | 33.9 ns | **25.0x** | 20.0x | 17.6x | 2.7x |
 | `int16` | 1 Mi | 36.5 ns | **24.0x** | 20.9x | 20.7x | 2.8x |
+| `float16` | 4 Ki | 7.8 ns | **4.6x** | 2.8x | 2.3x | 0.5x |
+| `float16` | 64 Ki | 39.3 ns | **23.3x** | 15.3x | 15.9x | 2.6x |
+| `float16` | 1 Mi | 39.6 ns | **23.4x** | 15.2x | 16.5x | 2.6x |
+| `bfloat16` | 4 Ki | 9.0 ns | **3.6x** | 2.3x | 3.1x | 0.6x |
+| `bfloat16` | 64 Ki | 32.4 ns | **12.7x** | 8.9x | 12.2x | 2.1x |
+| `bfloat16` | 1 Mi | 32.6 ns | **12.9x** | 9.0x | 12.5x | 2.1x |
 | `uint32` | 4 Ki | 9.8 ns | 4.5x | **4.7x** | 3.0x | 1.4x |
 | `uint32` | 64 Ki | 34.7 ns | 14.3x | **15.8x** | 7.9x | 2.8x |
 | `uint32` | 1 Mi | 44.9 ns | 11.9x | **20.5x** | 5.5x | 2.7x |
@@ -332,6 +338,16 @@ machines. Its reason to exist is that it touches no heap memory at all.
 beats making six full passes. Everywhere else the LSD sort is ahead, on both
 machines.
 
+**The two 16-bit floats are the same width and do not behave the same.** The
+comparison sort is faster on `bfloat16` (32.6 against 39.6 ns at 1 Mi) and the
+radix sort slower (2.5 against 1.7), so the speedup nearly halves, 23.4x to
+12.9x. The `sort` half of that has a cause: `bfloat16` keeps 7 mantissa bits
+where `float16` keeps 10, so a million values drawn from the same range
+collapse onto 3 147 distinct keys instead of 19 060, and duplicates are cheap
+to partition around. That does not explain the radix half. Fewer distinct keys
+also means a tighter scatter — 21 occupied buckets in the second pass against
+139 — which should help, not hurt. Measured, unexplained, left in.
+
 **The narrow types gain most.** A `uint8` needs one pass over 1 byte per
 element; a `uint64` needs six passes over 8 bytes each. Between those two, at
 64 Ki, the radix sort's cost rises 6.3x (0.70 to 4.42 ns/element) while the
@@ -370,6 +386,21 @@ The one width the two machines disagree about most flatly is 10. On the Ryzen
 it is the best choice for 64-bit types at 1 Mi; on the M4 it never wins
 anything — `BITS=11` beat it in 8 runs out of 8 in all six 64-bit cases, by
 8% at 4 Ki rising to 18% at 1 Mi.
+
+For 16-bit types a 16-bit digit is not absurd at all — it sorts them in one
+pass. Medians of three runs on the M4:
+
+| | passes | `float16` 4 Ki | `float16` 64 Ki | `float16` 1 Mi | `bfloat16` 4 Ki | `bfloat16` 64 Ki | `bfloat16` 1 Mi |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `BITS=8` | 2 | **1.72** | 1.70 | 1.69 | **2.52** | 2.55 | 2.51 |
+| `BITS=16` | 1 | 6.27 | **1.43** | **1.33** | 6.09 | **1.32** | **1.05** |
+
+One pass over a 256 KiB histogram against two over a 1 KiB one. Below 64 Ki
+the big histogram is all you are paying for and `BITS=8` wins by 2.4x to 3.7x;
+from 64 Ki up `BITS=16` wins, by 1.19x for `float16` and **2.39x** for
+`bfloat16` at 1 Mi. The dispatcher uses `BITS=8` for everything 16 bits and
+narrower and so leaves that on the table — see
+[`docs/improvements.md`](docs/improvements.md).
 
 The Ryzen agrees only in part:
 
