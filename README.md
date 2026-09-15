@@ -247,9 +247,9 @@ input. That refill is a `memcpy` costing 0.01–0.10 ns/element on the M4 and
 0.01–0.14 on the Ryzen; it is identical for every contender and is reported as
 a floor rather than subtracted out.
 
-The Ryzen figures are the median of three runs for the scalar, digit-width and
-path-key tables, and the mean of two for the rest. A Ryzen cell whose runs
-differed by more than 20% is marked ‡.
+The Ryzen figures are the median of eight runs for the digit-width table, of
+three for the scalar and path-key tables, and the mean of two for the rest. A
+Ryzen cell whose runs differed by more than 20% is marked ‡.
 
 Reproduce with `pixi run bench`.
 
@@ -362,24 +362,30 @@ On the M4, **an 11-bit digit wins for every 32- and 64-bit type at every size
 measured**, and an 8-bit digit for everything narrower. Two cases, not the
 four-way table the original implied.
 
-The Ryzen agrees at 4 Ki and 64 Ki, and not at 1 Mi:
+The Ryzen agrees only in part:
 
 | | `uint32` 4 Ki | `uint32` 1 Mi | `uint64` 4 Ki | `uint64` 1 Mi |
 | --- | ---: | ---: | ---: | ---: |
-| `BITS=4` | 4.68 | 4.94 | 10.80 | 13.17 |
-| `BITS=8` | 2.39 | 2.43 | 5.03 | 5.76 ‡ |
-| `BITS=10` | 2.71 | 2.58 | 4.84 | **5.71** |
-| `BITS=11` | **2.23** | 2.02 | **4.53** | 8.63 ‡ |
-| `BITS=13` | 3.32 | 2.14 | 5.86 | 8.00 ‡ |
-| `BITS=16` | 8.47 | **1.99** | 18.75 | 8.78 ‡ |
+| `BITS=4` | 4.67 | 4.95 | 10.68 | 12.17 ‡ |
+| `BITS=8` | 2.38 | 2.42 | 5.02 | 5.79 ‡ |
+| `BITS=10` | 2.69 | 2.54 | 4.81 | **5.46** |
+| `BITS=11` | **2.23** | 1.99 | **4.49** | 7.81 ‡ |
+| `BITS=13` | 3.32 | 2.13 | 5.70 | 7.39 ‡ |
+| `BITS=16` | 8.46 | 1.99 | 18.65 | 8.57 ‡ |
 
-For 64-bit types at 1 Mi a 10-bit digit takes about a third less time than an
-11-bit one — `float64` too, 5.75 against 9.04 ns. Every cell in that column
-moved between runs, but the order did not: `BITS=11` took at least 1.38 times
-as long as `BITS=10` in every run. A guess at why, not a measurement: two 1 Mi
-`uint64` buffers are 16 MiB, the size of this core's whole L3, and whether the
-kernel backs them with huge pages varies from run to run. For `uint32` at
-1 Mi, 11, 12 and 16 bits are within 2% of each other.
+On the Ryzen the best width depends on the type and the size. For 64-bit types
+at 1 Mi a 10-bit digit takes about 30% less time than an 11-bit one — `float64`
+too, 5.66 against 8.21 ns. Every width but `BITS=10` moved by more than 20%
+between runs in that column, but the order did not: `BITS=11` took at least
+1.31 times as long as `BITS=10` in every one of the eight runs. The other
+disagreements are smaller and just as consistent. `float32` prefers `BITS=16`
+in seven runs of eight: at 1 Mi `BITS=11` takes 1.27 times as long, at 64 Ki
+1.04 times. `float64` at 4 Ki prefers `BITS=10` by about 5%, in all eight. For
+`uint32` at 1 Mi, 11, 12 and 16 bits are within 2% of each other.
+
+A guess at why 1 Mi differs, not a measurement: two 1 Mi `uint64` buffers are
+16 MiB, the size of this core's whole L3, and whether the kernel backs them
+with huge pages varies from run to run.
 
 `BITS=16` is the instructive row. Four passes instead of six looks like a clear
 win and is not: four 65 536-counter histograms are 1 MiB, written twice before
@@ -389,7 +395,7 @@ sweep — 24.9 ns/element against 4.5 for `BITS=11` on the M4, 18.7 against
 
 One case is left on the table on the M4: `float64` at 64 Ki and above prefers
 `BITS=13` by about 9% (5.45 vs 6.01 ns at 1 Mi, confirmed across two runs).
-The Ryzen shows the same at 64 Ki (4.40 vs 4.90) and prefers `BITS=10` at
+The Ryzen shows the same at 64 Ki (4.42 vs 4.92) and prefers `BITS=10` at
 1 Mi. The dispatcher uses 11 for all 64-bit types rather than carry a
 size-dependent special case — which on the Ryzen costs every 64-bit type at
 1 Mi, not just one.
