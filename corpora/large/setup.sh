@@ -25,4 +25,9 @@ else
   rm -f "$target.tmp"
   echo "wrote corpora/large/$target"
 fi
+# Gutenberg serves CRLF. The benchmark splits on "\n" alone, so a kept "\r"
+# would end every line key, glue onto the last token of each line, and turn
+# every blank line into a one-byte key.
+tr -d '\r' < "$target" > "$target.tmp"
+mv "$target.tmp" "$target"
 wc -lc < "$target" | awk '{printf "  %s lines, %s bytes\n", $1, $2}'

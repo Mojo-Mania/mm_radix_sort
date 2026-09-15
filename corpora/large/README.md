@@ -13,7 +13,9 @@ pixi run bench-large
 Nothing here is committed. `benchmarks/bench_large_strings.mojo` derives every
 corpus from the single text file in Mojo — tokens, vocabulary, lines and
 phrases — so the derivations are in the benchmark where they can be read,
-rather than baked into files.
+rather than baked into files. Besides dropping Gutenberg's header and footer,
+`setup.sh` strips `\r`: Gutenberg serves CRLF, and the benchmark splits lines
+on `\n`.
 
 The default text is Tolstoy's *War and Peace* in the Maude translation,
 [Project Gutenberg ebook 2600](https://www.gutenberg.org/ebooks/2600), public
