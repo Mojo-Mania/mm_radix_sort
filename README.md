@@ -10,7 +10,7 @@ sort never asks: it reads the digits of a key and puts each element where its
 digits say it belongs. The work is then proportional to the number of digits
 rather than to `log n`, and on fixed-width numeric data that trade is very
 one-sided — on an array of 64 Ki elements or more it is **7 to 28 times
-faster than the stdlib's `sort`** on an Apple M4 and **6 to 30 times** on an
+faster than the stdlib's `sort`** on an Apple M4 and **7 to 30 times** on an
 AMD Ryzen AI 9 HX 370, with the narrower types gaining the most.
 
 ```mojo
@@ -38,8 +38,8 @@ public too, for when you know something it does not.
 enough that there is not much to weigh up, and it grows both with the size of
 the array and as the type gets narrower — a narrow key has fewer digits to
 walk. At 64 Ki elements a `uint8` sorts **27.8x** faster than `sort` and a
-`uint64` **7.6x**; at 4 Ki those become 8.4x and 2.3x. The Ryzen gives 30.1x
-and 9.6x at 64 Ki but only 4.6x and 2.2x at 4 Ki, where a `float64` sorts
+`uint64` **7.6x**; at 4 Ki those become 8.4x and 2.3x. The Ryzen gives 29.9x
+and 9.7x at 64 Ki but only 4.2x and 1.7x at 4 Ki, where a `float64` sorts
 slower with every radix kernel than with `sort` (0.8x at best).
 
 **Below the crossover, don't.** A radix pass writes its whole histogram twice —
@@ -216,12 +216,13 @@ one pass instead of three.
 and recurses into each bucket. That stops early — once a bucket holds few
 enough elements the remaining digits are never looked at — and each
 sub-problem soon fits in cache. It wins on `uint64` at 4 Ki, where six full
-LSD passes cost more than stopping early, and nowhere else measured.
+LSD passes cost more than stopping early, and nowhere else measured bar an
+edge of under 2% on `uint8` on the Ryzen.
 
 The two MSD variants differ only in the partition step: `msb_radix_sort`
 copies the range aside and scatters it back, `american_flag_sort` permutes in
 place with cyclic swaps. Permuting in place costs between **1.8x and 7.3x**
-across the measured grid on the M4 and 1.5x to 6.3x on the Ryzen — widest on
+across the measured grid on the M4 and 1.5x to 6.1x on the Ryzen — widest on
 the narrow types — and buys you a sort that never touches the heap.
 
 ### Variable-length keys need a 257th bucket
@@ -247,9 +248,10 @@ input. That refill is a `memcpy` costing 0.01–0.10 ns/element on the M4 and
 0.01–0.14 on the Ryzen; it is identical for every contender and is reported as
 a floor rather than subtracted out.
 
-The Ryzen figures are the median of eight runs for the digit-width table, of
-three for the scalar and path-key tables, and the mean of two for the rest. A
-Ryzen cell whose runs differed by more than 20% is marked ‡.
+The Ryzen figures are the median of eight runs for the 32- and 64-bit
+digit-width table, of three for the scalar, 16-bit digit-width and path-key
+tables, and the mean of two for the rest. A Ryzen cell whose runs differed by
+more than 20% is marked ‡.
 
 Reproduce with `pixi run bench`.
 
@@ -299,44 +301,57 @@ was the only genuine disagreement.
 
 | type | n | `sort` | `lsb[8]` | `lsb[11]` | `msb` | `aflag` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `uint8` | 4 Ki | 3.2 ns | **4.6x** | — | 4.5x | 0.8x |
-| `uint8` | 64 Ki | 20.8 ns | **30.1x** | — | 30.1x | 5.3x |
-| `uint8` | 1 Mi | 20.6 ns | **27.4x** | — | 27.2x | 4.3x |
-| `int16` | 4 Ki | 5.1 ns | **3.7x** | 2.9x | 1.4x | 0.7x |
-| `int16` | 64 Ki | 37.8 ns | **28.6x** | 24.8x | 18.8x | 3.8x |
-| `int16` | 1 Mi | 39.9 ns | **29.3x** | 25.4x | 21.4x | 4.0x |
-| `uint32` | 4 Ki | 4.1 ns | 1.8x | **1.9x** | 1.7x | 0.9x |
-| `uint32` | 64 Ki | 36.1 ns | 15.3x | **18.6x** | 5.7x | 3.1x |
-| `uint32` | 1 Mi | 47.0 ns | 19.6x | **23.6x** | 5.4x | 3.5x |
-| `int32` | 4 Ki | 4.4 ns | 1.9x | **2.0x** | 1.4x | 0.8x |
-| `int32` | 64 Ki | 35.9 ns | 15.3x | **18.7x** | 4.8x | 2.7x |
-| `int32` | 1 Mi | 46.4 ns | 19.4x | **23.4x** | 4.2x | 2.8x |
-| `float32` | 4 Ki | 11.2 ns | 3.7x | **4.5x** | 3.0x | 1.2x |
-| `float32` | 64 Ki | 45.4 ns | 14.8x | **19.6x** | 4.7x | 2.3x |
-| `float32` | 1 Mi | 57.7 ns | 18.5x | **24.2x** | 5.4x | 2.7x |
-| `uint64` | 4 Ki | 5.3 ns ‡ | 1.1x | 1.2x | **2.2x** | 1.1x |
-| `uint64` | 64 Ki | 38.0 ns | 7.5x | **9.6x** | 5.8x | 3.0x |
-| `uint64` | 1 Mi | 47.5 ns | **8.2x** | 6.3x ‡ | 5.1x | 3.3x |
-| `float64` | 4 Ki | 4.2 ns | 0.7x | **0.8x** | 0.7x | 0.4x |
-| `float64` | 64 Ki | 43.6 ns | 7.3x | **8.9x** | 4.1x | 2.0x |
-| `float64` | 1 Mi | 55.6 ns | **7.9x** | 6.5x | 3.9x | 2.1x |
+| `uint8` | 4 Ki | 2.9 ns | **4.2x** | — | 4.1x | 0.8x |
+| `uint8` | 64 Ki | 21.1 ns | 29.9x | — | **30.1x** | 5.6x |
+| `uint8` | 1 Mi | 20.5 ns | 26.6x | — | **27.0x** | 4.4x |
+| `int16` | 4 Ki | 4.5 ns | **3.0x** | 2.8x | 1.4x | 0.6x |
+| `int16` | 64 Ki | 40.8 ns | 27.9x | **28.7x** | 20.4x | 4.2x |
+| `int16` | 1 Mi | 42.7 ns | 28.8x | **29.5x** | 22.9x | 4.4x |
+| `float16` | 4 Ki | 5.5 ns | **2.7x** | 2.4x | 1.6x | 0.6x |
+| `float16` | 64 Ki | 53.8 ns | **26.9x** | 24.9x | 18.8x | 5.5x |
+| `float16` | 1 Mi | 52.4 ns | **25.6x** | 23.9x | 18.5x | 5.1x |
+| `bfloat16` | 4 Ki | 6.5 ns | **3.3x** | 2.7x | 2.0x | 0.7x |
+| `bfloat16` | 64 Ki | 36.9 ns | **18.9x** | 16.5x | 12.5x | 3.9x |
+| `bfloat16` | 1 Mi | 36.6 ns | **18.3x** | 16.2x | 12.2x | 3.4x |
+| `uint32` | 4 Ki | 4.3 ns | 1.8x | **1.9x** | 1.6x | 0.9x |
+| `uint32` | 64 Ki | 37.4 ns | 15.3x | **19.0x** | 5.9x | 3.2x |
+| `uint32` | 1 Mi | 47.5 ns | 19.0x | **23.3x** | 5.2x | 3.4x |
+| `int32` | 4 Ki | 4.2 ns | 1.7x | **1.7x** | 1.1x | 0.7x |
+| `int32` | 64 Ki | 36.3 ns | 15.3x | **17.0x** | 4.8x | 2.7x |
+| `int32` | 1 Mi | 47.8 ns | 19.4x | **21.5x** | 4.1x | 2.8x |
+| `float32` | 4 Ki | 5.1 ns | 1.6x | **1.9x** | 1.4x | 0.6x |
+| `float32` | 64 Ki | 44.5 ns | 14.5x | **18.5x** | 4.7x | 2.3x |
+| `float32` | 1 Mi | 56.2 ns | 18.0x | **22.8x** | 5.2x | 2.7x |
+| `uint64` | 4 Ki | 5.1 ns ‡ | 1.0x | 1.1x | **1.7x** | 1.0x |
+| `uint64` | 64 Ki | 38.6 ns | 7.7x | **9.7x** | 5.9x | 3.2x |
+| `uint64` | 1 Mi | 50.8 ns | **8.6x** | 6.7x | 5.2x | 3.5x |
+| `float64` | 4 Ki | 4.3 ns ‡ | 0.7x | **0.8x** | 0.7x | 0.4x |
+| `float64` | 64 Ki | 44.8 ns | 7.4x | **9.1x** | 4.2x | 2.1x |
+| `float64` | 1 Mi | 57.0 ns | **7.9x** | 7.0x | 4.0x | 2.2x |
 
-‡ At `uint64` 4 Ki it is `sort` itself that moved, from 4.5 to 5.7 ns, taking
-every ratio in the row with it. At 1 Mi `lsb[11]` measured 12.8, 7.6 and
-7.4 ns. The 64-bit rows at 1 Mi are the least stable measurement on this
-machine — see [Digit width](#digit-width).
+‡ Both 4 Ki rows moved because `sort` itself did — by 33% for `uint64` and 21%
+for `float64` across the three runs — taking every ratio in the row with it.
+
+This table was re-run after `float16` and `bfloat16` joined the benchmark. The
+library did not change, yet some cells moved further than the run-to-run
+spread. Several on `int16` and at 4 Ki moved by 15–20%, enough for `lsb[11]` to
+overtake `lsb[8]` on `int16`; `float32` at 4 Ki fell from 4.5x to 1.9x because
+`sort` there went from 11.2 to 5.1 ns. Adding two types changed the benchmark
+binary, most likely its code layout, not the sorts. Treat any single Ryzen cell
+as approximate.
 
 A few things worth reading off those tables.
 
 **`american_flag_sort` is not the one to use for speed.** At 4 Ki it loses to
-`sort` outright on four of the seven types on the M4, and five on the Ryzen.
+`sort` outright on five of the nine types on the M4, and on eight on the
+Ryzen, tying on the ninth.
 It differs from `msb_radix_sort` only in permuting in place rather than
 through a scratch buffer, and pays 1.5 to 7.3 times over for it across the two
 machines. Its reason to exist is that it touches no heap memory at all.
 
 **`msb_radix_sort` wins exactly once** — `uint64` at 4 Ki, where stopping early
 beats making six full passes. Everywhere else the LSD sort is ahead, on both
-machines.
+machines — bar `uint8` on the Ryzen, where `msb` edges `lsb[8]` by under 2%.
 
 **The two 16-bit floats are the same width and do not behave the same.** The
 comparison sort is faster on `bfloat16` (32.6 against 39.6 ns at 1 Mi) and the
@@ -346,19 +361,22 @@ where `float16` keeps 10, so a million values drawn from the same range
 collapse onto 3 147 distinct keys instead of 19 060, and duplicates are cheap
 to partition around. That does not explain the radix half. Fewer distinct keys
 also means a tighter scatter — 21 occupied buckets in the second pass against
-139 — which should help, not hurt. Measured, unexplained, left in.
+139 — which should help, not hurt. Measured, unexplained, left in. On the
+Ryzen only the `sort` half reproduces: `sort` is again faster on `bfloat16`
+(36.6 against 52.4 ns at 1 Mi), but the radix sort is not slower (2.00 against
+2.04 ns), so the unexplained part looks specific to the M4.
 
 **The narrow types gain most.** A `uint8` needs one pass over 1 byte per
 element; a `uint64` needs six passes over 8 bytes each. Between those two, at
 64 Ki, the radix sort's cost rises 6.3x (0.70 to 4.42 ns/element) while the
 comparison sort's rises only 1.7x — and 6.3 / 1.7 is exactly the 3.7x by which
-the two speedups differ. On the Ryzen the same pair is 5.8x (0.69 to 3.97)
+the two speedups differ. On the Ryzen the same pair is 5.7x (0.70 to 4.01)
 against 1.8x, and the speedups differ by 3.1x.
 
 **The Ryzen prefers `lsb[8]` for 64-bit types at 1 Mi**, in all three runs:
-5.8 against 7.6 ns/element for `uint64`, 7.0 against 8.6 for `float64`.
-`radix_sort` uses `BITS=11` there, so on this machine it leaves about a fifth
-on the table. The next section has more.
+5.9 against 7.6 ns/element for `uint64`, 7.2 against 8.2 for `float64`.
+`radix_sort` uses `BITS=11` there, so on this machine it leaves between an
+eighth and a quarter on the table. The next section has more.
 
 ### Digit width
 
@@ -402,6 +420,17 @@ from 64 Ki up `BITS=16` wins, by 1.19x for `float16` and **2.39x** for
 narrower and so leaves that on the table — see
 [`docs/improvements.md`](docs/improvements.md).
 
+On the Ryzen, medians of three runs:
+
+| | passes | `float16` 4 Ki | `float16` 64 Ki | `float16` 1 Mi | `bfloat16` 4 Ki | `bfloat16` 64 Ki | `bfloat16` 1 Mi |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `BITS=8` | 2 | **2.03** | 2.00 | 2.02 | **1.98** | 1.94 | 2.00 |
+| `BITS=16` | 1 | 4.97 | **1.54** | **1.36** | 4.54 | **1.28** | **1.11** |
+
+The crossover sits in the same place. Below it `BITS=8` wins by 2.4x and 2.3x;
+above it `BITS=16` wins by 1.30x and 1.52x at 64 Ki and 1.49x and 1.80x at
+1 Mi — more than on the M4 for `float16`, less for `bfloat16`.
+
 The Ryzen agrees only in part:
 
 | | `uint32` 4 Ki | `uint32` 1 Mi | `uint64` 4 Ki | `uint64` 1 Mi |
@@ -423,9 +452,21 @@ in seven runs of eight: at 1 Mi `BITS=11` takes 1.27 times as long, at 64 Ki
 1.04 times. `float64` at 4 Ki prefers `BITS=10` by about 5%, in all eight. For
 `uint32` at 1 Mi, 11, 12 and 16 bits are within 2% of each other.
 
-A guess at why 1 Mi differs, not a measurement: two 1 Mi `uint64` buffers are
-16 MiB, the size of this core's whole L3, and whether the kernel backs them
-with huge pages varies from run to run.
+**Why 1 Mi: the L3 cache.** An LSD pass reads one buffer and scatters into
+another, and for `uint64` at 1 Mi those two hold 16 MiB — the size of this
+core's L3. The HX 370's smaller Zen 5c cores share an 8 MiB L3, and there the
+cliff comes at half the size. On core 6, `BITS=11` takes 0.91 times as long as
+`BITS=10` at 384 Ki, 1.18 times at 512 Ki and 1.69 at 768 Ki; on core 2 it is
+still 0.94 at 768 Ki and 1.31 at 1 Mi. Past the cache fewer buckets keep
+winning: at 2 Mi and 4 Mi an 8-bit digit is fastest and `BITS=11` takes about
+twice as long as `BITS=10`. Page size makes it worse without causing it: with
+transparent huge pages disabled the cliff arrives earlier — an 8- or 10-bit
+digit already wins at 768 Ki — and every cell is slower, by up to 55%.
+
+These were one-off sweeps outside `bench-bits`, three runs per setting, all
+on `uint64`. The two core types may differ in more than L3 size, so this is
+strong evidence rather than proof. The M4, which has no L3, shows no such jump
+at 1 Mi.
 
 `BITS=16` is the instructive row. Four passes instead of six looks like a clear
 win and is not: four 65 536-counter histograms are 1 MiB, written twice before
