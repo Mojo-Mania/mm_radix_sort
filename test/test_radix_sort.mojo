@@ -57,20 +57,24 @@ def _assert_matches_sort[
             len(expected),
             String(context, " / ", variants[which], ": length changed"),
         )
+        # Written out rather than handed to `assert_equal` per element: the
+        # message argument is built eagerly, so every passing element cost a
+        # `String` construction, which dominated the suite's runtime.
         for i in range(len(work)):
-            assert_equal(
-                work[i],
-                expected[i],
-                String(
-                    context,
-                    " / ",
-                    variants[which],
-                    ": element ",
-                    i,
-                    " of ",
-                    len(work),
-                ),
-            )
+            if work[i] != expected[i]:
+                assert_equal(
+                    work[i],
+                    expected[i],
+                    String(
+                        context,
+                        " / ",
+                        variants[which],
+                        ": element ",
+                        i,
+                        " of ",
+                        len(work),
+                    ),
+                )
 
 
 def _assert_strings_match_sort(var words: List[String], context: String) raises:
@@ -80,11 +84,12 @@ def _assert_strings_match_sort(var words: List[String], context: String) raises:
     radix_sort(span)
     assert_equal(len(words), len(expected), String(context, ": length changed"))
     for i in range(len(words)):
-        assert_equal(
-            words[i],
-            expected[i],
-            String(context, ": element ", i, " of ", len(words)),
-        )
+        if words[i] != expected[i]:
+            assert_equal(
+                words[i],
+                expected[i],
+                String(context, ": element ", i, " of ", len(words)),
+            )
 
 
 # ===-----------------------------------------------------------------------===#

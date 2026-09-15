@@ -41,6 +41,42 @@ def unsigned_dtype[D: DType]() -> DType:
 
 
 @always_inline
+def ordered_bits_of_raw[
+    D: DType
+](raw: Scalar[unsigned_dtype[D]()]) -> Scalar[unsigned_dtype[D]()]:
+    """Maps the raw bit pattern of a `D` onto a key that sorts in the same order.
+
+    This is `ordered_bits` with the load already done. It exists because Metal
+    has no `double`: a GPU kernel cannot so much as load a `Float64` into a
+    register, so the GPU package reads keys through a pointer bitcast to the
+    unsigned type and needs the flip to start from raw bits.
+
+    Parameters:
+        D: The type the bits came from.
+
+    Args:
+        raw: The bit pattern, reinterpreted as an unsigned integer.
+
+    Returns:
+        An unsigned integer of the same width whose unsigned ordering matches
+        the natural ordering of `D`.
+    """
+    comptime U = unsigned_dtype[D]()
+    comptime W = bit_width_of[D]()
+    comptime SIGN = Scalar[U](1) << Scalar[U](W - 1)
+
+    comptime if D.is_floating_point():
+        # Arithmetic-shifting the sign bit down to all-ones (for a negative)
+        # or all-zeros (for a positive), then forcing the sign bit on.
+        var mask = (Scalar[U](0) - (raw >> Scalar[U](W - 1))) | SIGN
+        return raw ^ mask
+    elif D.is_signed():
+        return raw ^ SIGN
+    else:
+        return raw
+
+
+@always_inline
 def ordered_bits[D: DType, //](value: Scalar[D]) -> Scalar[unsigned_dtype[D]()]:
     """Maps `value` onto an unsigned integer that sorts in the same order.
 
@@ -54,20 +90,7 @@ def ordered_bits[D: DType, //](value: Scalar[D]) -> Scalar[unsigned_dtype[D]()]:
         An unsigned integer of the same width whose unsigned ordering matches
         the natural ordering of `D`.
     """
-    comptime U = unsigned_dtype[D]()
-    comptime W = bit_width_of[D]()
-    comptime SIGN = Scalar[U](1) << Scalar[U](W - 1)
-
-    comptime if D.is_floating_point():
-        var raw = bitcast[U](value)
-        # Arithmetic-shifting the sign bit down to all-ones (for a negative)
-        # or all-zeros (for a positive), then forcing the sign bit on.
-        var mask = (Scalar[U](0) - (raw >> Scalar[U](W - 1))) | SIGN
-        return raw ^ mask
-    elif D.is_signed():
-        return bitcast[U](value) ^ SIGN
-    else:
-        return bitcast[U](value)
+    return ordered_bits_of_raw[D](bitcast[unsigned_dtype[D]()](value))
 
 
 @always_inline
