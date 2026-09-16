@@ -31,13 +31,25 @@ comptime _TABLE_BUDGET = 64 * 1024 if (
 private histograms it keeps.
 
 There is no way to ask the target how large its L1 data cache is, so this is a
-constant per architecture. Both numbers are half of a typical L1 -- 128 KiB on
-Apple silicon, 32 KiB on x86 -- and the half is deliberate: the counting pass
-does not have the cache to itself, and spending all of it there costs the
+constant per architecture, and both constants are measured. On Apple silicon
+it is half of the M4's 128 KiB L1, and the half is deliberate: the counting
+pass does not have the cache to itself, and spending all of it there costs the
 scatter passes more than it saves. See `_table_count`.
 
-Only the Apple silicon figure has been measured. The other is a guess shaped
-to be safe rather than fast."""
+On x86 it is 16 KiB, which is a third of the 48 KiB L1 on the Ryzen AI 9 HX
+370 it was measured on, and it gives a 32- or 64-bit type at `BITS=11` a single
+table. A/B through the whole sort, three runs of each binary:
+
+- **48 KiB for every type**, two tables for 32-bit ones, made `uint32` and
+  `int32` 2-3% slower at 64 Ki; only `float32` gained.
+- **48 KiB for floating-point types only** bought `float32` about 2% at 64 Ki
+  and 1 Mi through `radix_sort`, and cost it 5% at 4 Ki -- a size at which the
+  second table is never built, so the cost is that of compiling the branch in.
+
+The first A/B also read `float32` as a 6-7% gain and the second showed
+`float64`, whose code had not changed, 22% slower. Both were code layout in
+the benchmark binary. Only the measurement through the public entry point
+survived."""
 
 comptime _MAX_TABLES = 4
 """Beyond four the measured curve is flat."""

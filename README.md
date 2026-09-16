@@ -251,9 +251,16 @@ a floor rather than subtracted out.
 
 The M4 scalar table below is the mean of two clean runs taken together, after
 the private per-histogram change; a cell whose two runs differed by more than
-20% is marked ‡. The other M4 tables, and all the Ryzen ones, predate that
-change and are conservative for the `lsb` columns by up to 9% -- the counting
-pass got faster, which those tables do not yet show.
+20% is marked ‡. The other M4 tables predate that change and are
+conservative for the `lsb` columns by up to 9% -- the counting pass got
+faster, which those tables do not yet show.
+
+The Ryzen tables predate it too, but on x86 the change is narrower: its
+histogram budget is 16 KiB, which keeps a single table for 32- and 64-bit
+types at `BITS=10` and above, so their counting pass is the one those tables
+measured. What did change there is every digit of 8 bits or fewer, which is
+every `lsb[8]` column and how `radix_sort` sorts 8- and 16-bit types; those
+cells are not yet re-measured.
 
 The Ryzen figures are the median of eight runs for the 32- and 64-bit
 digit-width table, of three for the scalar, 16-bit digit-width and path-key
