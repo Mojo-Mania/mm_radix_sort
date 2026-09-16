@@ -395,17 +395,18 @@ The four LSD sorts this package replaced differed only in their digit width —
 
 | | `uint32` 4 Ki | `uint32` 1 Mi | `uint64` 4 Ki | `uint64` 1 Mi |
 | --- | ---: | ---: | ---: | ---: |
-| `BITS=4` | 6.59 | 7.55 | 13.03 | 16.14 |
-| `BITS=6` | 4.19 | 4.92 | 7.08 | 9.55 |
-| `BITS=8` | 2.19 | 3.72 | 4.26 ‡ | 6.34 |
-| `BITS=10` | 2.93 | 3.15 | 4.56 | 5.70 |
-| **`BITS=11`** | **2.08** | **2.20** | **4.14** | **4.82** |
-| `BITS=12` | 2.53 | 2.45 | 5.92 | 5.33 |
-| `BITS=13` | 3.76 | 2.75 | 7.64 | 5.18 |
-| `BITS=16` | 12.59 | 3.60 | 24.64 | 7.55 |
+| `BITS=4` | 6.57 | 7.45 | 12.87 | 15.81 |
+| `BITS=6` | 4.06 | 4.71 | 7.00 | 9.35 |
+| `BITS=8` | 2.19 | 3.61 | 4.38 | 6.13 |
+| `BITS=10` | 2.93 | 2.96 | 4.38 | 5.54 |
+| **`BITS=11`** | **2.05** | **2.12** | **4.01** | **4.66** |
+| `BITS=12` | 2.53 | 2.46 | 5.68 | 5.22 |
+| `BITS=13` | 3.74 | 2.78 | 7.00 | 5.32 |
+| `BITS=16` | 12.46 | 3.60 | 24.22 | 7.42 |
 
-Medians of eight runs; ‡ marks a cell that moved by more than 20% between
-them. On the M4, **an 11-bit digit wins for every 32- and 64-bit type at every
+Mean of two runs taken after the private-histogram change; ‡ marks a cell
+whose two runs differed by more than 20%. The eight-run medians this replaces
+were 1-4% slower in every column. On the M4, **an 11-bit digit wins for every 32- and 64-bit type at every
 size measured**, and an 8-bit digit for everything narrower. Two cases, not the
 four-way table the original implied.
 
@@ -480,12 +481,16 @@ at 1 Mi.
 `BITS=16` is the instructive row. Four passes instead of six looks like a clear
 win and is not: four 65 536-counter histograms are 1 MiB, written twice before
 any data moves. At 4 Ki that fixed cost makes it the *slowest* width in the
-sweep — 24.6 ns/element against 4.1 for `BITS=11` on the M4, 18.7 against
+sweep — 24.2 ns/element against 4.0 for `BITS=11` on the M4, 18.7 against
 4.5 on the Ryzen — and on the M4 it never catches up.
 
-One case is left on the table on the M4: `float64` at 64 Ki and above prefers
-`BITS=13` — by 5% at 64 Ki (5.48 against 5.79 ns) and 11% at 1 Mi (5.42
-against 6.04), in 8 runs out of 8 at both sizes.
+One case is left on the table on the M4: `float64` at 64 Ki prefers `BITS=13`
+— 5.40 against 5.69 ns, about 5%, in both runs and in the 8 runs of the
+earlier campaign. At 1 Mi it no longer reproduces: the two runs put `BITS=13`
+at 5.38 and 12.72 ns against a steady 5.86 for `BITS=11`, so it wins or loses
+by a factor of two depending on the run. The earlier campaign called it an 11%
+win in 8 runs of 8; two runs now disagree with each other, and that is the
+honest state of it.
 The Ryzen shows the same at 64 Ki (4.42 vs 4.92) and prefers `BITS=10` at
 1 Mi. The dispatcher uses 11 for all 64-bit types rather than carry a
 size-dependent special case — which on the Ryzen costs every 64-bit type at
@@ -494,23 +499,25 @@ size-dependent special case — which on the Ryzen costs every 64-bit type at
 ### Repetition and key width
 
 Two properties get conflated under "low cardinality", and only one of them
-changes what a radix sort does. `uint32`, 1 Mi elements,
+changes what a radix sort does. `uint32`, 1 Mi elements, mean of two runs,
 `pixi run bench-cardinality`:
 
 | distinct values | `sort` | `lsb[11]` | `msb` | `aflag` |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | **0.57** | 0.66 | 1.32 | 1.33 |
-| 4 | 4.78 | 4.64 | **2.64** | 6.74 |
-| 256 | 19.54 | **4.82** | 6.84 | 13.40 |
-| 65 536 | 40.16 | **3.50** | 6.10 | 14.39 |
-| all distinct | 44.35 | **2.19** | 8.27 | 16.76 |
+| 1 | **0.57** | 0.61 | 1.30 | 1.29 |
+| 4 | 4.58 | 4.28 | **2.62** | 6.63 |
+| 32 | 11.54 | 4.75 | **3.35** | 7.50 |
+| 256 | 19.09 | **4.71** | 6.60 | 13.00 |
+| 4 096 | 27.95 | **4.07** | 6.62 | 14.45 |
+| 65 536 | 39.17 | **3.44** | 5.89 | 13.87 |
+| all distinct | 43.07 | **2.13** | 8.12 | 16.30 |
 
 | key width | `sort` | `lsb[11]` | `msb` | `aflag` |
 | ---: | ---: | ---: | ---: | ---: |
-| 8 bits | 19.29 | **1.32** | 2.14 | 7.20 |
-| 16 bits | 40.82 | **1.86** | 3.47 | 12.73 |
-| 24 bits | 44.53 | **2.77** | 9.19 | 18.05 |
-| 32 bits | 45.26 | **2.23** | 8.44 | 17.16 |
+| 8 bits | 18.88 | **1.32** | 2.10 | 6.99 |
+| 16 bits | 40.06 | **1.80** | 3.52 | 12.38 |
+| 24 bits | 43.70 | **2.51** | 8.84 | 17.06 |
+| 32 bits | 43.17 | **2.13** | 8.09 | 16.26 |
 
 On the Ryzen:
 
@@ -635,15 +642,15 @@ or more, by 1.36x at worst.
 ### The dispatch threshold
 
 `pixi run bench-dispatch` shows where the fallback should sit and whether
-`radix_sort` tracks it. `uint64`, nanoseconds per element:
+`radix_sort` tracks it. `uint64`, nanoseconds per element, mean of two runs:
 
 | n | `sort` | `lsb[11]` | `radix_sort` |
 | ---: | ---: | ---: | ---: |
-| 16 | 2.48 | 240.13 | **2.47** |
-| 256 | 4.99 | 17.81 | **4.87** |
-| 1024 | 6.22 | 6.71 | **6.40** |
-| 2048 | 6.89 | 4.84 | **4.80** |
-| 4096 | 8.06 | 4.08 | **4.08** |
+| 16 | 2.29 | 236.06 | **2.21** |
+| 256 | 4.58 | 17.37 | **4.57** |
+| 1024 | **6.09** | 6.52 | 6.11 |
+| 2048 | 6.75 | 4.69 | **4.66** |
+| 4096 | 8.67 ‡ | 3.96 | **3.96** |
 
 On the Ryzen:
 

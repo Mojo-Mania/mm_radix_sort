@@ -42,6 +42,17 @@ to be safe rather than fast."""
 comptime _MAX_TABLES = 4
 """Beyond four the measured curve is flat."""
 
+comptime _FOLD_MARGIN = 8
+"""How many times the counting work must exceed the fold before the private
+tables are worth building.
+
+Folding costs `(tables - 1) * PASSES * BUCKETS` additions whatever `n` is,
+while counting costs `n * PASSES` increments, so on a short span the fold is
+the larger of the two. At `n = 4096` with `BITS=11` it is 6144 additions
+against 12288 increments, and the first version of this shipped without the
+check and made that case **19% slower** -- 2.08 to 2.47 ns/element. The
+re-measured digit-width table is what caught it."""
+
 
 def _table_count[PASSES: Int, BUCKETS: Int]() -> Int:
     """Returns how many private histograms fit the budget.
@@ -153,16 +164,26 @@ def lsb_radix_sort[
     var already_sorted = True
     var previous = ordered_bits(base[unsafe_offset=0])
     var i = 0
-    var whole = n - (n % TABLES)
-    while i < whole:
-        comptime for t in range(TABLES):
-            var key = ordered_bits(base[unsafe_offset=i + t])
-            already_sorted = already_sorted and key >= previous
-            previous = key
-            comptime for p in range(PASSES):
-                var slot = t * TABLE + p * BUCKETS + digit[D, BITS](key, p)
-                histograms[unsafe_offset=slot] += 1
-        i += TABLES
+    var folding = False
+    comptime if TABLES > 1:
+        # Only worth the fold on a span long enough to amortise it.
+        if n >= _FOLD_MARGIN * (TABLES - 1) * BUCKETS:
+            folding = True
+            var whole = n - (n % TABLES)
+            while i < whole:
+                comptime for t in range(TABLES):
+                    var key = ordered_bits(base[unsafe_offset=i + t])
+                    already_sorted = already_sorted and key >= previous
+                    previous = key
+                    comptime for p in range(PASSES):
+                        var slot = (
+                            t * TABLE + p * BUCKETS + digit[D, BITS](key, p)
+                        )
+                        histograms[unsafe_offset=slot] += 1
+                i += TABLES
+
+    # Whatever that loop did not take -- which is all of it when the span was
+    # too short to bother -- goes straight into the first table.
     while i < n:
         var key = ordered_bits(base[unsafe_offset=i])
         already_sorted = already_sorted and key >= previous
@@ -173,11 +194,12 @@ def lsb_radix_sort[
 
     # Fold the private tables into the first one, which everything below reads.
     comptime if TABLES > 1:
-        for slot in range(TABLE):
-            var total = histograms[unsafe_offset=slot]
-            comptime for t in range(1, TABLES):
-                total += histograms[unsafe_offset=t * TABLE + slot]
-            histograms[unsafe_offset=slot] = total
+        if folding:
+            for slot in range(TABLE):
+                var total = histograms[unsafe_offset=slot]
+                comptime for t in range(1, TABLES):
+                    total += histograms[unsafe_offset=t * TABLE + slot]
+                histograms[unsafe_offset=slot] = total
 
     if already_sorted:
         dealloc(
