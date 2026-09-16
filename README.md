@@ -37,8 +37,9 @@ public too, for when you know something it does not.
 **For numbers, above a few thousand of them, always.** The margin is large
 enough that there is not much to weigh up, and it grows both with the size of
 the array and as the type gets narrower — a narrow key has fewer digits to
-walk. At 64 Ki elements a `uint8` sorts **27.8x** faster than `sort` and a
-`uint64` **7.6x**; at 4 Ki those become 8.4x and 2.3x. The Ryzen gives 29.9x
+walk. At 64 Ki elements a `uint8` sorts **28.3x** faster than `sort` and a
+`uint64` **7.6x**; at 4 Ki the `uint8` becomes 8.3x and the `uint64` is not
+worth quoting -- its baseline is the one cell that will not hold still. The Ryzen gives 29.9x
 and 9.7x at 64 Ki but only 4.2x and 1.7x at 4 Ki, where a `float64` sorts
 slower with every radix kernel than with `sort` (0.8x at best).
 
@@ -248,6 +249,12 @@ input. That refill is a `memcpy` costing 0.01–0.10 ns/element on the M4 and
 0.01–0.14 on the Ryzen; it is identical for every contender and is reported as
 a floor rather than subtracted out.
 
+The M4 scalar table below is the mean of two clean runs taken together, after
+the private per-histogram change; a cell whose two runs differed by more than
+20% is marked ‡. The other M4 tables, and all the Ryzen ones, predate that
+change and are conservative for the `lsb` columns by up to 9% -- the counting
+pass got faster, which those tables do not yet show.
+
 The Ryzen figures are the median of eight runs for the 32- and 64-bit
 digit-width table, of three for the scalar, 16-bit digit-width and path-key
 tables, and the mean of two for the rest. A Ryzen cell whose runs differed by
@@ -264,38 +271,40 @@ absolute cost in nanoseconds per element.
 
 | type | n | `sort` | `lsb[8]` | `lsb[11]` | `msb` | `aflag` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `uint8` | 4 Ki | 6.0 ns | **8.4x** | — | 8.2x | 1.3x |
-| `uint8` | 64 Ki | 19.5 ns | **27.8x** | — | 26.7x | 4.4x |
-| `uint8` | 1 Mi | 19.3 ns | **25.7x** | — | 25.3x | 3.9x |
-| `int16` | 4 Ki | 8.3 ns | **6.2x** | 4.4x | 1.7x | 0.8x |
-| `int16` | 64 Ki | 33.9 ns | **25.0x** | 20.0x | 17.6x | 2.7x |
-| `int16` | 1 Mi | 36.5 ns | **24.0x** | 20.9x | 20.7x | 2.8x |
-| `float16` | 4 Ki | 7.8 ns | **4.6x** | 2.8x | 2.3x | 0.5x |
-| `float16` | 64 Ki | 39.3 ns | **23.3x** | 15.3x | 15.9x | 2.6x |
-| `float16` | 1 Mi | 39.6 ns | **23.4x** | 15.2x | 16.5x | 2.6x |
-| `bfloat16` | 4 Ki | 9.0 ns | **3.6x** | 2.3x | 3.1x | 0.6x |
-| `bfloat16` | 64 Ki | 32.4 ns | **12.7x** | 8.9x | 12.2x | 2.1x |
-| `bfloat16` | 1 Mi | 32.6 ns | **12.9x** | 9.0x | 12.5x | 2.1x |
-| `uint32` | 4 Ki | 9.8 ns | 4.5x | **4.7x** | 3.0x | 1.4x |
-| `uint32` | 64 Ki | 34.7 ns | 14.3x | **15.8x** | 7.9x | 2.8x |
-| `uint32` | 1 Mi | 44.9 ns | 11.9x | **20.5x** | 5.5x | 2.7x |
-| `int32` | 4 Ki | 9.2 ns | 4.0x | **4.3x** | 1.9x | 1.1x |
-| `int32` | 64 Ki | 34.8 ns | 13.9x | **15.9x** | 7.2x | 2.5x |
-| `int32` | 1 Mi | 44.9 ns | 12.0x | **19.6x** | 3.9x | 2.2x |
-| `float32` | 4 Ki | 8.2 ns | 2.4x | **3.0x** | 1.8x | 0.6x |
-| `float32` | 64 Ki | 42.8 ns | 12.1x | **16.5x** | 5.5x | 2.1x |
-| `float32` | 1 Mi | 55.8 ns | 14.6x | **21.9x** | 5.4x | 2.3x |
-| `uint64` | 4 Ki | 7.5 ns | 1.8x | 1.8x | **2.3x** | 1.2x |
-| `uint64` | 64 Ki | 33.6 ns | 6.5x | **7.6x** | 6.4x | 2.3x |
-| `uint64` | 1 Mi | 44.2 ns | 7.0x | **9.2x** | 5.1x | 2.7x |
-| `float64` | 4 Ki | 7.7 ns | **1.2x** | 0.7x † | 1.0x | 0.5x |
-| `float64` | 64 Ki | 43.5 ns | 6.6x | **7.5x** | 5.1x | 2.0x |
-| `float64` | 1 Mi | 55.9 ns | 7.6x | **9.2x** | 3.7x | 1.9x |
+| `uint8` | 4 Ki | 5.7 ns | **8.3x** | — | 7.6x | 1.3x |
+| `uint8` | 64 Ki | 18.6 ns | **28.3x** | — | 25.5x | 4.2x |
+| `uint8` | 1 Mi | 19.2 ns | **27.8x** | — | 24.8x | 3.9x |
+| `int16` | 4 Ki | 8.9 ns ‡ | **7.2x** | 4.1x | 1.9x | 0.9x |
+| `int16` | 64 Ki | 33.1 ns | **27.1x** | 21.6x | 17.1x | 2.7x |
+| `int16` | 1 Mi | 37.1 ns | **26.8x** | 23.7x | 20.9x | 2.9x |
+| `float16` | 4 Ki | 7.5 ns | **4.7x** | 2.6x | 2.3x | 0.5x |
+| `float16` | 64 Ki | 38.0 ns | **24.4x** | 16.6x | 15.5x | 2.6x |
+| `float16` | 1 Mi | 38.9 ns | **25.1x** | 17.2x | 16.3x | 2.6x |
+| `bfloat16` | 4 Ki | 10.0 ns | **4.4x** | 2.8x | 3.4x | 0.7x |
+| `bfloat16` | 64 Ki | 31.6 ns | **14.1x** | 11.5x | 12.0x | 2.1x |
+| `bfloat16` | 1 Mi | 32.5 ns | **14.6x** | 12.1x | 12.4x | 2.1x |
+| `uint32` | 4 Ki | 9.0 ns ‡ | **4.0x** | 3.6x | 2.8x | 1.3x |
+| `uint32` | 64 Ki | 34.5 ns | 14.2x | **16.0x** | 8.4x | 3.0x |
+| `uint32` | 1 Mi | 44.8 ns | 12.1x | **21.0x** | 5.5x | 2.7x |
+| `int32` | 4 Ki | 7.9 ns | **3.4x** | 3.2x | 1.7x | 0.9x |
+| `int32` | 64 Ki | 32.2 ns | 13.3x | **15.1x** | 6.5x | 2.4x |
+| `int32` | 1 Mi | 44.0 ns | 12.0x | **19.6x** | 3.9x | 2.2x |
+| `float32` | 4 Ki | 8.1 ns | 2.3x | **2.6x** | 1.8x | 0.6x |
+| `float32` | 64 Ki | 41.4 ns | 12.1x | **16.5x** | 5.6x | 2.2x |
+| `float32` | 1 Mi | 55.2 ns | 15.5x | **22.7x** | 5.5x | 2.3x |
+| `uint64` | 4 Ki | 16.4 ns ‡ | 3.7x | 4.1x | **5.1x** | 2.5x |
+| `uint64` | 64 Ki | 33.5 ns | 6.4x | 7.6x | **7.9x** | 2.6x |
+| `uint64` | 1 Mi | 44.6 ns | 7.0x | **9.5x** | 5.3x | 2.7x |
+| `float64` | 4 Ki | 8.9 ns | 1.4x | **1.5x** | 1.1x | 0.5x |
+| `float64` | 64 Ki | 41.6 ns | 6.4x | **7.2x** | 4.5x | 1.9x |
+| `float64` | 1 Mi | 56.1 ns | 7.8x | **9.4x** | 3.8x | 1.9x |
 
-† The one cell two independent clean runs disagreed on by more than 20%: the
-other run put it at 1.3x. At 4 Ki a six-pass sort is close enough to the
-crossover that the number is not stable. Of the 81 cells measured twice, this
-was the only genuine disagreement.
+‡ The three cells two clean runs disagreed on by more than 20%, all of them
+the `sort` baseline at 4 Ki and none of them a radix kernel: `int16` 8.0 and
+9.7 ns, `uint32` 8.0 and 10.0, `uint64` 25.1 and 7.8. The last is a factor of
+3.2 and it is the denominator of every speedup in its row, so read that row as
+an order of magnitude rather than a number. The other 129 cells of the 132
+agreed to within 14%, and to within 5% at 1 Mi.
 
 **AMD Ryzen AI 9 HX 370**
 
